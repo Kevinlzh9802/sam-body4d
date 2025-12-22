@@ -14,7 +14,7 @@ mnt_path=/tudelft.net/staff-umbrella/neon/
 # local_path=/home/nfs/zli33
 bind_mnt_path=/mnt/zonghuan
 # bind_local_path=/mnt/zli33
-sif_path=$bind_mnt_path/large_builds/containers/detectron_env.sif
+sif_path=$bind_mnt_path/apptainers/detectron_env.sif
 
 sam_3d_body_path=$bind_mnt_path/projects/sam-3d-body
 input_folder=$bind_mnt_path/datasets/sam_3d_body/images_raw
