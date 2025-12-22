@@ -2,6 +2,7 @@
 __pycache__/
 gradio_tmp/
 outputs/
+checkpoints/
 *.egg-info
 body4d.yaml
 save_masks.py
