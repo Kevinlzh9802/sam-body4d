@@ -2,7 +2,7 @@
 # Configuration Template for SAM-Body4D
 #
 # This is a runtime config template used by the setup script.
-# The setup script will replace `/home/zonghuan/tudelft/projects/sam-body4d/checkpoints` with the user-specified
+# The setup script will replace `${CKPT_ROOT}` with the user-specified
 # checkpoint directory and generate `configs/body4d.yaml`.
 #
 # NOTE:
@@ -12,7 +12,7 @@
 
 paths:
   # Global root directory for all checkpoints (filled by setup script)
-  ckpt_root: "/home/zonghuan/tudelft/projects/sam-body4d/checkpoints"
+  ckpt_root: "${CKPT_ROOT}"
 
 # ---------------------------------------------------------------------------
 # SAM3
