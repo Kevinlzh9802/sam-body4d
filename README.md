@@ -109,6 +109,50 @@ ${CKPT_ROOT}/
 After placing the files correctly, you can run the setup script again.
 Existing files will be detected and skipped automatically.
 
+## 🎯 Inference Scripts
+
+We provide multiple ways to run inference:
+
+### 1. Interactive Gradio App (`app.py`)
+**Best for**: Manual annotation and exploration
+```bash
+python app.py
+```
+- Upload videos and interactively click to annotate people
+- Visualize results in real-time
+
+### 2. Command-Line Tool (`infer_video.py`)
+**Best for**: Batch processing with known object locations
+```bash
+# Step 1: Get bounding boxes interactively
+python tools/get_bbox_interactive.py --video your_video.mp4 --frame 0
+
+# Step 2: Run inference with the boxes
+python infer_video.py \
+    --video your_video.mp4 \
+    --config configs/body4d.yaml \
+    --output results/ \
+    --boxes "1,0,150,200,350,600" "2,0,400,150,600,550"
+```
+
+**Important**: You must provide initial prompts (bounding boxes or points) for SAM-3 to track objects. Use `--boxes` or `--points` arguments.
+
+### 3. Python Library (`scripts/offline_app.py`)
+**Best for**: Integration into other scripts
+```python
+from scripts.offline_app import offline_app
+app = offline_app(refine_occlusion=True)
+# See INFERENCE_GUIDE.md for details
+```
+
+### 📖 Detailed Documentation
+
+For comprehensive usage instructions, see:
+- **[ANSWERS.md](ANSWERS.md)** - Quick answers about initialization and prompts
+- **[INFERENCE_GUIDE.md](INFERENCE_GUIDE.md)** - Complete usage guide
+- **[example_usage.sh](example_usage.sh)** - Working examples
+- **[SUMMARY.md](SUMMARY.md)** - Overview of all scripts
+
 ## 📝 Citation
 If you find this repository useful, please consider giving a star ⭐ and citation.
 ```
