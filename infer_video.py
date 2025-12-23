@@ -17,6 +17,8 @@ import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
+import pickle
+# from tools.load_bbox_kp import load_bbox_kp
 
 # Add model paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -409,6 +411,16 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     
     return out_4d_path
 
+def load_bbox_kp(bbox_kp_folder: str, folder_name: str):
+    """
+    Load bboxes and kps from a folder.
+    """
+    bboxes_kps_data = None
+    if len(bbox_kp_folder):
+        keypoint_path = os.path.join(bbox_kp_folder, f"{folder_name}.pkl")
+        with open(keypoint_path, "rb") as kp_f:
+            bboxes_kps_data = pickle.load(kp_f)
+    return bboxes_kps_data
 
 def main():
     parser = argparse.ArgumentParser(
@@ -430,18 +442,18 @@ Examples:
     parser.add_argument("--video", type=str, required=True, help="Path to input video")
     parser.add_argument("--config", type=str, default="configs/body4d.yaml", help="Path to config file")
     parser.add_argument("--output", type=str, default=None, help="Output directory (default: auto-generated)")
-    parser.add_argument("--boxes", type=str, nargs="+", default=None, 
-                        help="Bounding boxes for tracking (format: 'obj_id,frame_idx,x_min,y_min,x_max,y_max')")
+    # parser.add_argument("--boxes", type=str, nargs="+", default=None, 
+                        # help="Bounding boxes for tracking (format: 'obj_id,frame_idx,x_min,y_min,x_max,y_max')")
     parser.add_argument("--points", type=str, nargs="+", default=None,
                         help="Points for tracking (format: 'obj_id,frame_idx,x,y,label' where label: 1=positive, 0=negative)")
     parser.add_argument("--no-completion", action="store_true", help="Disable completion module")
     args = parser.parse_args()
     
     # Validate that at least one initialization method is provided
-    if args.boxes is None and args.points is None:
-        parser.error("You must provide either --boxes or --points to initialize tracking.\n"
-                    "SAM-3 needs to know what objects to track in the video.\n"
-                    "Use --help for examples.")
+    # if args.boxes is None and args.points is None:
+    #     parser.error("You must provide either --boxes or --points to initialize tracking.\n"
+    #                 "SAM-3 needs to know what objects to track in the video.\n"
+    #                 "Use --help for examples.")
     
     # Setup device
     if torch.cuda.is_available():
@@ -509,40 +521,45 @@ Examples:
     # Parse and add prompts
     out_obj_ids = []
     
-    if args.boxes is not None:
-        print("[INFO] Adding bounding box prompts...")
+    # if args.boxes is not None:
+    print("[INFO] Adding bounding box prompts...")
+    
+    bboxes_kps_data = load_bbox_kp("/mnt/zonghuan/sam4d_body/inputs/bboxes_kps_refined", "428")
+    selected_boxes = [2, 4, 6, 8]
+    for obj_id in selected_boxes:
+        bbox = bboxes_kps_data[0]['bboxes'][obj_id]
+        rel_box = bbox / [width, height, width, height]
+    # for box_str in args.boxes:
+    #     parts = box_str.split(',')
+    #     if len(parts) != 6:
+    #         raise ValueError(f"Invalid box format: {box_str}. Expected: obj_id,frame_idx,x_min,y_min,x_max,y_max")
         
-        for box_str in args.boxes:
-            parts = box_str.split(',')
-            if len(parts) != 6:
-                raise ValueError(f"Invalid box format: {box_str}. Expected: obj_id,frame_idx,x_min,y_min,x_max,y_max")
-            
-            obj_id = int(parts[0])
-            frame_idx = int(parts[1])
-            x_min, y_min, x_max, y_max = map(float, parts[2:6])
-            
-            # Convert to relative coordinates
-            rel_box = np.array([[x_min / width, y_min / height, x_max / width, y_max / height]], dtype=np.float32)
-            
-            print(f"  Object {obj_id} at frame {frame_idx}: box [{x_min}, {y_min}, {x_max}, {y_max}]")
-            
-            _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points_or_box(
-                inference_state=inference_state,
-                frame_idx=frame_idx,
-                obj_id=obj_id,
-                box=rel_box,
-            )
-    else:
-        print("[INFO] Adding testing box prompts...")
-        box = np.array([[499.70489502, 146.70619202, 624.59869385, 247.97242737]], dtype=np.float32)
-        rel_box = [[x / width, y / height, x / width, y / height] for x, y in box]
-        rel_box = np.array(rel_box, dtype=np.float32)
+    #     obj_id = int(parts[0])
+    #     frame_idx = int(parts[1])
+    #     x_min, y_min, x_max, y_max = map(float, parts[2:6])
+        
+    #     # Convert to relative coordinates
+    #     rel_box = np.array([[x_min / width, y_min / height, x_max / width, y_max / height]], dtype=np.float32)
+        
+        print(f"  Object {obj_id} at frame {0}: box relative coordinates {rel_box}")
+        
         _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points_or_box(
             inference_state=inference_state,
             frame_idx=0,
-            obj_id=1,
+            obj_id=obj_id,
             box=rel_box,
         )
+    # else:
+    #     print("[INFO] Adding testing box prompts...")
+    #     box = np.array([[499.70489502, 146.70619202, 624.59869385, 247.97242737]], dtype=np.float32)
+    #     rel_box = [[x / width, y / height, x / width, y / height] for x, y in box]
+    #     rel_box = np.array(rel_box, dtype=np.float32)
+    #     _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points_or_box(
+    #         inference_state=inference_state,
+    #         frame_idx=0,
+    #         obj_id=1,
+    #         box=rel_box,
+    #     )
         
     if args.points is not None:
         print("[INFO] Adding point prompts...")

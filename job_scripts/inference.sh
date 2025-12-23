@@ -11,16 +11,12 @@
 
 #SBATCH --gres=gpu:a40:1 # Request 1 GPU
 mnt_path=/tudelft.net/staff-umbrella/neon/
-# local_path=/home/nfs/zli33
-bind_mnt_path=/mnt/zonghuan
-# bind_local_path=/mnt/zli33
-sif_path=$bind_mnt_path/apptainers/detectron_env.sif
+bind_mnt_path=/mnt
+sif_path=$bind_mnt_path/apptainer/sam-body4d.sif
 
-sam_3d_body_path=$bind_mnt_path/projects/sam-3d-body
-input_folder=$bind_mnt_path/datasets/sam_3d_body/images_raw
-output_folder=$bind_mnt_path/datasets/sam_3d_body/outputs/images_with_kp
+project_folder=$bind_mnt_path/zonghuan/projects/sam-body4d
+input_folder=$bind_mnt_path/zonghuan/data/sam4d_body/inputs
+output_folder=$bind_mnt_path/zonghuan/data/sam4d_body/outputs
 kp_folder=$bind_mnt_path/datasets/sam_3d_body/bboxes_kps
-checkpoint_path=$bind_mnt_path/large_models/sam-3d-body-dinov3/model.ckpt
-mhr_path=$bind_mnt_path/large_models/sam-3d-body-dinov3/assets/mhr_model.pt
 
-apptainer exec --nv --bind $mnt_path:$bind_mnt_path $sif_path python $sam_3d_body_path/demo.py --image_folder $input_folder --output_folder $output_folder --checkpoint_path $checkpoint_path --mhr_path $mhr_path --bbox_kp_folder $kp_folder
+apptainer exec --nv --bind $mnt_path:$bind_mnt_path $sif_path python $sam_3d_body_path/demo.py --image_folder $input_folder --output_folder $output_folder 
