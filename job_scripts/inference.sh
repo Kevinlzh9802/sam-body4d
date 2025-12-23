@@ -17,6 +17,5 @@ sif_path=$bind_mnt_path/apptainer/sam-body4d.sif
 project_folder=$bind_mnt_path/zonghuan/projects/sam-body4d
 input_folder=$bind_mnt_path/zonghuan/data/sam4d_body/inputs
 output_folder=$bind_mnt_path/zonghuan/data/sam4d_body/outputs
-kp_folder=$bind_mnt_path/datasets/sam_3d_body/bboxes_kps
 
-apptainer exec --nv --bind $mnt_path:$bind_mnt_path $sif_path python $sam_3d_body_path/demo.py --image_folder $input_folder --output_folder $output_folder 
+apptainer exec --nv --bind $mnt_path:$bind_mnt_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
