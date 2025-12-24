@@ -20,4 +20,4 @@ project_folder=$bind_zli_path/projects/sam-body4d
 input_folder=$bind_neon_path/zonghuan/data/sam4d_body/inputs
 output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs
 
-apptainer exec --nv --bind $neon_path:$bind_neon_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
+apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
