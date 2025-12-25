@@ -62,6 +62,40 @@ https://pytorch.org/get-started/previous-versions/
 pip install -e .
 ```
 
+## 🧪 Apptainer / Singularity (cluster)
+
+If you want a self-contained `.sif` for running on a cluster, make sure **SAM3 is installed inside the image**.
+Even though this repo imports SAM3 via `models.sam3...`, the SAM3 code itself imports `sam3.*` internally; if `sam3` is not installed, you will see:
+`ModuleNotFoundError: No module named 'sam3'`.
+
+#### Build the SIF
+
+```bash
+apptainer build body4d.sif apptainer/body4d.def
+```
+
+#### Quick import check inside the image (recommended)
+
+```bash
+apptainer exec body4d.sif python scripts/doctor_imports.py
+```
+
+#### Run on GPU nodes
+
+Bind your checkpoint directory into the container and pass the normal commands:
+
+```bash
+apptainer exec --nv \
+  --bind /path/to/checkpoints:/checkpoints \
+  body4d.sif \
+  python infer_video.py --video /path/to/input.mp4 --config configs/body4d.yaml
+```
+
+**Debug tips if you still see `sam3` import errors**
+- **Use the same python/pip**: inside the image, always prefer `python -m pip ...` (never plain `pip ...`).
+- **Verify install location**: `apptainer exec body4d.sif python -c "import sam3; print(sam3.__file__)"`.
+- **If you bind-mount the repo** over the image’s `/opt/sam-body4d`, you can accidentally “hide” the code the editable install points to. Either don’t bind-mount the repo, or bind it to a different path.
+
 
 ## 🚀 Run the Demo
 

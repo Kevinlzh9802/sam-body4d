@@ -1,0 +1,79 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Author sam-body4d
+    Description SAM-Body4D (with SAM3 installed as a real Python package)
+
+%help
+    Build:
+      apptainer build body4d.sif apptainer/body4d.def
+
+    Run (GPU):
+      apptainer exec --nv --bind /path/to/checkpoints:/checkpoints body4d.sif \
+        python infer_video.py --video /path/to/input.mp4 --config configs/body4d.yaml
+
+%environment
+    # Make the conda env the default Python.
+    export MAMBA_ROOT_PREFIX=/opt/micromamba
+    export PATH=/opt/micromamba/envs/body4d/bin:/opt/micromamba/bin:$PATH
+    export PYTHONUNBUFFERED=1
+
+%files
+    . /opt/sam-body4d
+
+%post
+    set -euo pipefail
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        wget \
+        bzip2 \
+        build-essential \
+        cmake \
+        ninja-build \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1
+    rm -rf /var/lib/apt/lists/*
+
+    # --- micromamba install (static binary) ---
+    # Ref: https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html
+    mkdir -p /opt/micromamba/bin
+    wget -qO /opt/micromamba/bin/micromamba.tar.bz2 \
+      https://micro.mamba.pm/api/micromamba/linux-64/latest
+    tar -xjf /opt/micromamba/bin/micromamba.tar.bz2 -C /opt/micromamba/bin --strip-components=1 bin/micromamba
+    rm -f /opt/micromamba/bin/micromamba.tar.bz2
+    chmod +x /opt/micromamba/bin/micromamba
+
+    export MAMBA_ROOT_PREFIX=/opt/micromamba
+    export PATH=/opt/micromamba/bin:$PATH
+
+    # Create the runtime env (matches repo requires-python >=3.12)
+    /opt/micromamba/bin/micromamba create -y -n body4d -c conda-forge python=3.12 pip
+
+    # Use the env's python/pip for everything below
+    export PATH=/opt/micromamba/envs/body4d/bin:/opt/micromamba/bin:$PATH
+    python -m pip install -U pip setuptools wheel
+
+    # --- Core deps (match README; adjust CUDA wheel index as needed) ---
+    # NOTE: on clusters, you typically run with `apptainer exec --nv ...` so the host driver is used.
+    python -m pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+    python -m pip install "git+https://github.com/facebookresearch/detectron2.git@a1ce2f9" --no-build-isolation --no-deps
+
+    # --- IMPORTANT: install SAM3 as an actual package ---
+    # This is what fixes: ModuleNotFoundError: No module named 'sam3'
+    python -m pip install -e /opt/sam-body4d/models/sam3
+
+    # Install the main repo (also editable so you can bind-mount and iterate if desired)
+    python -m pip install -e /opt/sam-body4d
+
+    # Quick sanity check
+    python /opt/sam-body4d/scripts/doctor_imports.py
+
+

@@ -10,12 +10,14 @@
 #SBATCH --error=/home/nfs/zli33/slurm_outputs/sam_3d_body/slurm_%j.err # Set name of error log. %j is the Slurm jobId
 
 #SBATCH --gres=gpu:a40:1 # Request 1 GPU
+#SBATCH --gres=gpu:a40:1 # Request 1 GPU
 neon_path=/tudelft.net/staff-umbrella/neon
 zli_path=/home/nfs/zli33
+
 bind_neon_path=/mnt/neon
 bind_zli_path=/mnt/zli33
 
-sif_path=$bind_neon_path/apptainer/sam-body4d.sif
+sif_path=$neon_path/apptainer/sam-body4d.sif
 project_folder=$bind_zli_path/projects/sam-body4d
 input_folder=$bind_neon_path/zonghuan/data/sam4d_body/inputs
 output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs

@@ -12,30 +12,20 @@
 #SBATCH --gres=gpu:a40:1 # Request 1 GPU
 neon_path=/tudelft.net/staff-umbrella/neon
 zli_path=/home/nfs/zli33
-# apptainer_path=/tudelft.net/staff-bulk/ewi/insy/SPCLab/zonghuan
 
 bind_neon_path=/mnt/neon
 bind_zli_path=/mnt/zli33
-# bind_apptainer_path=/mnt/zonghuan
 
 sif_path=$neon_path/apptainer/sam-body4d.sif
 project_folder=$bind_zli_path/projects/sam-body4d
 input_folder=$bind_neon_path/zonghuan/data/sam4d_body/inputs
 output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs
 
-apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
+# apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 
-# bulk_path=/tudelft.net/staff-bulk/ewi/insy/SPCLab/zonghuan
-# local_path=/home/nfs/zli33
-# bind_bulk_path=/mnt/zonghuan
-# bind_local_path=/mnt/zli33
-# sif_path=$bulk_path/large_builds/containers/detectron_env.sif
-
-# sam_3d_body_path=$bind_local_path/projects/sam-3d-body
-# input_folder=$bind_bulk_path/datasets/sam_3d_body/images_test
-# output_folder=$bind_bulk_path/datasets/sam_3d_body/outputs/images_test
-# kp_folder=$bind_bulk_path/datasets/sam_3d_body/bboxes_kps
-# checkpoint_path=$bind_bulk_path/large_models/sam-3d-body-dinov3/model.ckpt
-# mhr_path=$bind_bulk_path/large_models/sam-3d-body-dinov3/assets/mhr_model.pt
-
-# apptainer exec --nv --bind $bulk_path:$bind_bulk_path --bind $local_path:$bind_local_path $sif_path python $sam_3d_body_path/demo.py --image_folder $input_folder --output_folder $output_folder --checkpoint_path $checkpoint_path --mhr_path $mhr_path --bbox_kp_folder $kp_folder
+apptainer exec --nv \
+  --bind $neon_path:$bind_neon_path \
+  --bind $zli_path:$bind_zli_path \
+  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
+  $sif_path \
+  python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder
