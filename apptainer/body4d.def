@@ -23,8 +23,9 @@ From: ubuntu:22.04
     . /opt/sam-body4d
 
 %post
-    set -euo pipefail
-    export DEBIAN_FRONTEND=noninteractive
+    
+    # set -euo pipefail
+    # export DEBIAN_FRONTEND=noninteractive
 
     apt-get update
     apt-get install -y --no-install-recommends \
