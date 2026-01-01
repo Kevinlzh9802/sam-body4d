@@ -1,4 +1,5 @@
 .vscode/
+apptainer/
 __pycache__/
 gradio_tmp/
 outputs/
