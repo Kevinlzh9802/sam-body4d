@@ -213,7 +213,7 @@ class ImageNet_C_Metric(Metric):
         self.tp += torch.bincount(index, weights=tps, minlength=len(CORRUPTION_LEVEL_TO_ID))
 
     def compute(self) -> Tensor:
-        flattened_scores = (self.tp / self.total).float().float().cpu().numpy()
+        flattened_scores = (self.tp / self.total).float().cpu().float().numpy()
         scores: Scores = {}
         for i, score in enumerate(flattened_scores):
             corruption_type, level = ID_TO_CORRUPTION_LEVEL[i]

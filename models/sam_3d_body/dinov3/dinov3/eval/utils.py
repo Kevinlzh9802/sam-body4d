@@ -224,7 +224,7 @@ def save_features_dict(features_dict: Dict[str, torch.Tensor], path: str) -> Non
         torch.save(features_dict, path)
     elif ext == ".npy":
         numpy_features_dict = {  # Convert to NumPy arrays (if possible)
-            key: value.float().cpu().numpy() for key, value in features_dict.items()
+            key: value.cpu().float().numpy() for key, value in features_dict.items()
         }
         np.save(path, numpy_features_dict, allow_pickle=True)
     else:
@@ -281,6 +281,6 @@ def save_results(
     preds_path = os.path.join(output_dir, preds_filename)
     target_path = os.path.join(output_dir, target_filename)
     logger.info(f"Saving to {preds_path}")
-    np.save(preds_path, preds.float().cpu().numpy())
+    np.save(preds_path, preds.cpu().float().numpy())
     logger.info(f"Saving to {target_path}")
-    np.save(target_path, target.float().cpu().numpy())
+    np.save(target_path, target.cpu().float().numpy())

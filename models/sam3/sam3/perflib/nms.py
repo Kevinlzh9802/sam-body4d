@@ -78,8 +78,8 @@ def generic_nms_cpu(
     A generic version of `torchvision.ops.nms` that takes a pairwise IoU matrix. (CPU implementation
     based on https://github.com/jwyang/faster-rcnn.pytorch/blob/master/lib/model/nms/nms_cpu.py)
     """
-    ious_np = ious.float().detach().float().cpu().numpy()
-    scores_np = scores.float().detach().float().cpu().numpy()
+    ious_np = ious.float().detach().cpu().float().numpy()
+    scores_np = scores.float().detach().cpu().float().numpy()
     order = scores_np.argsort()[::-1]
     kept_inds = []
     while order.size > 0:

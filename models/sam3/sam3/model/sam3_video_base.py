@@ -532,7 +532,7 @@ class Sam3VideoBase(nn.Module):
 
         # Step 1: make the update plan and resolve heuristics on GPU 0
         det_mask_preds: Tensor = det_out["mask"]  # low-res mask logits
-        det_scores_np: npt.NDArray = det_out["scores"].float().float().cpu().numpy()
+        det_scores_np: npt.NDArray = det_out["scores"].float().cpu().float().numpy()
         det_bbox_xyxy: Tensor = det_out["bbox"]
         if self.rank == 0:
             # a) match detector and tracker masks and find new objects
@@ -552,7 +552,7 @@ class Sam3VideoBase(nn.Module):
                 keep = self._suppress_detections_close_to_boundary(
                     det_bbox_xyxy[new_det_fa_inds]
                 )
-                new_det_fa_inds = new_det_fa_inds[keep.float().cpu().numpy()]
+                new_det_fa_inds = new_det_fa_inds[keep.cpu().float().numpy()]
 
             # check whether we've hit the maximum number of objects we can track (and if so, drop some detections)
             prev_obj_num = np.sum(tracker_metadata_prev["num_obj_per_gpu"])
@@ -1069,9 +1069,9 @@ class Sam3VideoBase(nn.Module):
             and logger.isEnabledFor(logging.DEBUG)
             and frame_idx is not None
         ):
-            suppress_i_mask = suppress_i_mask.float().cpu().numpy()
-            suppress_j_mask = suppress_j_mask.float().cpu().numpy()
-            last_occluded = last_occluded.float().cpu().numpy()
+            suppress_i_mask = suppress_i_mask.cpu().float().numpy()
+            suppress_j_mask = suppress_j_mask.cpu().float().numpy()
+            last_occluded = last_occluded.cpu().float().numpy()
 
             # Find all suppression pairs without using torch.where
             batch_size = suppress_i_mask.shape[0]
@@ -1207,7 +1207,7 @@ class Sam3VideoBase(nn.Module):
         elif det_masks.size(0) == 0:
             # all previous tracklets are unmatched if they have a non-zero area
             new_det_fa_inds = np.array([], np.int64)
-            trk_is_nonempty = (trk_masks > 0).any(dim=(1, 2)).float().cpu().numpy()
+            trk_is_nonempty = (trk_masks > 0).any(dim=(1, 2)).cpu().float().numpy()
             unmatched_trk_obj_ids = trk_obj_ids[trk_is_nonempty]
             empty_trk_obj_ids = trk_obj_ids[~trk_is_nonempty]
             det_to_matched_trk_obj_ids = {}
@@ -1242,7 +1242,7 @@ class Sam3VideoBase(nn.Module):
         trk_masks_binary = trk_masks > 0
         ious = mask_iou(det_masks_binary, trk_masks_binary)  # (N, M)
 
-        ious_np = ious.float().cpu().numpy()
+        ious_np = ious.cpu().float().numpy()
         if self.o2o_matching_masklets_enable:
             from scipy.optimize import linear_sum_assignment
 
@@ -1256,7 +1256,7 @@ class Sam3VideoBase(nn.Module):
         else:
             trk_is_matched = (ious_np >= iou_threshold_trk).any(axis=0)
         # Non-empty tracks not matched by Hungarian assignment above threshold are unmatched
-        trk_is_nonempty = trk_masks_binary.any(dim=(1, 2)).float().cpu().numpy()
+        trk_is_nonempty = trk_masks_binary.any(dim=(1, 2)).cpu().float().numpy()
         trk_is_unmatched = np.logical_and(trk_is_nonempty, ~trk_is_matched)
         unmatched_trk_obj_ids = trk_obj_ids[trk_is_unmatched]
         # also record masklets that have zero area in SAM 2 prediction

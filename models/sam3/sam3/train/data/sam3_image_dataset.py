@@ -209,7 +209,7 @@ class CustomCocoDetectionAPI(VisionDataset):
                         (
                             img_id,
                             torchvision.transforms.ToPILImage()(
-                                video[int(frame)].asnumpy()
+                                video[int(frame)].asfloat().numpy()
                             ),
                         )
                     )

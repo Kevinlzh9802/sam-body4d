@@ -40,7 +40,7 @@ def run_moge(model, input_image, device):
     moge_data = model.infer(input_image)
 
     # get intrinsics
-    intrinsics = denormalize_f(moge_data["intrinsics"].float().cpu().numpy(), H, W)
+    intrinsics = denormalize_f(moge_data["intrinsics"].cpu().float().numpy(), H, W)
     v_focal = intrinsics[1, 1]
 
     # override hfov with v_focal

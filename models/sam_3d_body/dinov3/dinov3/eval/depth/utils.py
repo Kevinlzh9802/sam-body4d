@@ -28,9 +28,9 @@ def align_depth_least_square(
         assert isinstance(gt_arr, torch.Tensor) and isinstance(valid_mask_arr, torch.Tensor)
         pred_arr = pred_arr.to(torch.float32)  # unsupported other types
         device = gt_arr.device
-        gt_arr = gt_arr.detach().float().cpu().numpy()
-        pred_arr = pred_arr.detach().float().cpu().numpy()
-        valid_mask_arr = valid_mask_arr.detach().float().cpu().numpy()
+        gt_arr = gt_arr.detach().cpu().float().numpy()
+        pred_arr = pred_arr.detach().cpu().float().numpy()
+        valid_mask_arr = valid_mask_arr.detach().cpu().float().numpy()
 
     gt = gt_arr.squeeze()  # [H, W]
     pred = pred_arr.squeeze()
@@ -41,9 +41,9 @@ def align_depth_least_square(
         scale_factor = np.min(max_resolution / np.array(ori_shape[-2:]))
         if scale_factor < 1:
             downscaler = torch.nn.Upsample(scale_factor=scale_factor, mode="nearest")
-            gt = downscaler(torch.as_tensor(gt).unsqueeze(0)).numpy()
-            pred = downscaler(torch.as_tensor(pred).unsqueeze(0)).numpy()
-            valid_mask = downscaler(torch.as_tensor(valid_mask).unsqueeze(0).float()).bool().numpy()
+            gt = downscaler(torch.as_tensor(gt).unsqueeze(0)).float().numpy()
+            pred = downscaler(torch.as_tensor(pred).unsqueeze(0)).float().numpy()
+            valid_mask = downscaler(torch.as_tensor(valid_mask).unsqueeze(0).float()).bool().float().numpy()
 
     assert gt.shape == pred.shape == valid_mask.shape, f"{gt.shape}, {pred.shape}, {valid_mask.shape}"
 

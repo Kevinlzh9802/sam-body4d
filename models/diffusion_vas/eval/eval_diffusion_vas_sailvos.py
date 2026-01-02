@@ -57,7 +57,7 @@ def convert_rgb_to_depth2(rgb_images, depth_model):
 
 
     # Convert the RGB images to depth maps
-    depth_maps = [depth_model.infer_image(rgb_image.float().cpu().numpy()[0]) for rgb_image in rgb_images]
+    depth_maps = [depth_model.infer_image(rgb_image.cpu().float().numpy()[0]) for rgb_image in rgb_images]
 
     depth_maps = np.array(depth_maps)
     # Normalize the depth maps to the range [0, 1]
@@ -129,7 +129,7 @@ def eval_diffusion_vas_on_sailvos(args):
         depth_imgs = depth_imgs.unsqueeze(1).repeat(1, 3, 1, 1).unsqueeze(0)
 
         # print("depth_imgs:", depth_imgs.shape, depth_imgs.min(), depth_imgs.max())
-        # plt.imsave('depth_frame0_ch0.png', ((depth_imgs[0, 0, 0] + 1) / 2).float().cpu().numpy(), cmap='gray')
+        # plt.imsave('depth_frame0_ch0.png', ((depth_imgs[0, 0, 0] + 1) / 2).cpu().float().numpy(), cmap='gray')
 
         image_ids, obj_id, cat_id = batch_data["image_ids"], batch_data["obj_id"], batch_data["cat_id"]
 

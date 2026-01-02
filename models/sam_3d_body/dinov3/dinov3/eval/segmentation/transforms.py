@@ -69,7 +69,7 @@ class PhotoMetricDistortion(torch.nn.Module):
             saturation_factor = np.random.uniform(self.saturation_lower, self.saturation_upper)
             img_tensor = torch.tensor(img.astype(np.uint8)).permute((2, 0, 1))
             img_tensor = Fv.adjust_saturation(img_tensor, saturation_factor)
-            img = img_tensor.permute((1, 2, 0)).numpy()
+            img = img_tensor.permute((1, 2, 0)).float().numpy()
         return img
 
     def hue(self, img: np.ndarray) -> np.ndarray:
@@ -77,13 +77,13 @@ class PhotoMetricDistortion(torch.nn.Module):
             hue_factor = np.random.uniform(self.hue_lower, self.hue_upper)
             img_tensor = torch.tensor(img.astype(np.uint8)).permute((2, 0, 1))
             img_tensor = Fv.adjust_hue(img_tensor, hue_factor)
-            img = img_tensor.permute((1, 2, 0)).numpy()
+            img = img_tensor.permute((1, 2, 0)).float().numpy()
         return img
 
     def forward(self, img, label) -> Tuple[torch.Tensor, Any]:
         """Transform function to perform photometric distortion on images."""
         # Operations need numpy arrays
-        img = img.permute((1, 2, 0)).numpy()
+        img = img.permute((1, 2, 0)).float().numpy()
         # random brightness
         img = self.brightness(img)
         # mode == 0 --> do random contrast first

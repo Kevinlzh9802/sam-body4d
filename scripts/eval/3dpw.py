@@ -46,7 +46,7 @@ def inference(args):
                 seq_name_with_id = f'{seq}_{obj_id}'
                 try:
                     # only consider the first frame bbox
-                    bbox = bboxes[seq_name_with_id]['bbx_xyxy'][ann_frame_idx].numpy()
+                    bbox = bboxes[seq_name_with_id]['bbx_xyxy'][ann_frame_idx].float().numpy()
                     # Let's add a box at (x_min, y_min, x_max, y_max) = (300, 0, 500, 400) to get started
                     box = np.array([bbox], dtype=np.float32)
                     rel_box = [[xmin / width, ymin / height, xmax / width, ymax / height] for xmin, ymin, xmax, ymax in box]

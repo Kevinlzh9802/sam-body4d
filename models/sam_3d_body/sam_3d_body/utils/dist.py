@@ -24,7 +24,7 @@ def recursive_to(x: Any, target: torch.device):
         return {k: recursive_to(v, target) for k, v in x.items()}
     elif isinstance(x, torch.Tensor):
         if target == "numpy":
-            return x.numpy()
+            return x.float().numpy()
         else:
             return x.to(target)
     elif isinstance(x, list):
@@ -595,7 +595,7 @@ def collect_results_cpu(
             tmpdir = torch.tensor(bytearray(tmpdir.encode()), dtype=torch.uint8)
             dir_tensor[: len(tmpdir)] = tmpdir
         broadcast(dir_tensor, 0)
-        tmpdir = dir_tensor.numpy().tobytes().decode().rstrip()
+        tmpdir = dir_tensor.float().numpy().tobytes().decode().rstrip()
     else:
         os.makedirs(tmpdir, exist_ok=True)
 

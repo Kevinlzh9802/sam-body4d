@@ -180,7 +180,7 @@ class _PanopticPrediction:
             # VOID label.
             label_divisor = metadata.label_divisor
             segments_info = []
-            for panoptic_label in np.unique(panoptic_seg.numpy()):
+            for panoptic_label in np.unique(panoptic_seg.float().numpy()):
                 if panoptic_label == -1:
                     # VOID region.
                     continue
@@ -201,7 +201,7 @@ class _PanopticPrediction:
 
         self._sinfo = {s["id"]: s for s in segments_info}  # seg id -> seg info
         segment_ids, areas = torch.unique(panoptic_seg, sorted=True, return_counts=True)
-        areas = areas.numpy()
+        areas = areas.float().numpy()
         sorted_idxs = np.argsort(-areas)
         self._seg_ids, self._seg_areas = segment_ids[sorted_idxs], areas[sorted_idxs]
         self._seg_ids = self._seg_ids.tolist()
@@ -223,7 +223,7 @@ class _PanopticPrediction:
         assert (
             len(empty_ids) == 1
         ), ">1 ids corresponds to no labels. This is currently not supported"
-        return (self._seg != empty_ids[0]).numpy().astype(np.bool)
+        return (self._seg != empty_ids[0]).float().numpy().astype(np.bool)
 
     def semantic_masks(self):
         for sid in self._seg_ids:
@@ -231,14 +231,14 @@ class _PanopticPrediction:
             if sinfo is None or sinfo["isthing"]:
                 # Some pixels (e.g. id 0 in PanopticFPN) have no instance or semantic predictions.
                 continue
-            yield (self._seg == sid).numpy().astype(np.bool), sinfo
+            yield (self._seg == sid).float().numpy().astype(np.bool), sinfo
 
     def instance_masks(self):
         for sid in self._seg_ids:
             sinfo = self._sinfo.get(sid)
             if sinfo is None or not sinfo["isthing"]:
                 continue
-            mask = (self._seg == sid).numpy().astype(np.bool)
+            mask = (self._seg == sid).float().numpy().astype(np.bool)
             if mask.sum() > 0:
                 yield mask, sinfo
 
@@ -473,7 +473,7 @@ class Visualizer:
         if self._instance_mode == ColorMode.IMAGE_BW:
             self.output.reset_image(
                 self._create_grayscale_image(
-                    (predictions.pred_masks.any(dim=0) > 0).numpy()
+                    (predictions.pred_masks.any(dim=0) > 0).float().numpy()
                     if predictions.has("pred_masks")
                     else None
                 )
@@ -504,7 +504,7 @@ class Visualizer:
             output (VisImage): image object with visualizations.
         """
         if isinstance(sem_seg, torch.Tensor):
-            sem_seg = sem_seg.numpy()
+            sem_seg = sem_seg.float().numpy()
         labels, areas = np.unique(sem_seg, return_counts=True)
         sorted_idxs = np.argsort(-areas).tolist()
         labels = labels[sorted_idxs]
@@ -1506,7 +1506,7 @@ class Visualizer:
         Convert different format of boxes to an NxB array, where B = 4 or 5 is the box dimension.
         """
         if isinstance(boxes, Boxes) or isinstance(boxes, RotatedBoxes):
-            return boxes.tensor.detach().numpy()
+            return boxes.tensor.detach().float().numpy()
         else:
             return np.asarray(boxes)
 
@@ -1522,9 +1522,9 @@ class Visualizer:
         if isinstance(m, PolygonMasks):
             m = m.polygons
         if isinstance(m, BitMasks):
-            m = m.tensor.numpy()
+            m = m.tensor.float().numpy()
         if isinstance(m, torch.Tensor):
-            m = m.numpy()
+            m = m.float().numpy()
         ret = []
         for x in m:
             if isinstance(x, GenericMask):

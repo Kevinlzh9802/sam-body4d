@@ -37,7 +37,7 @@ class SAM3DBodyEstimator:
         self.thresh_wrist_angle = 1.4
 
         # For mesh visualization
-        self.faces = self.model.head_pose.faces.float().cpu().numpy()
+        self.faces = self.model.head_pose.faces.cpu().float().numpy()
 
         if self.detector is None:
             print("No human detector is used...")
@@ -267,7 +267,7 @@ class SAM3DBodyEstimator:
                     continue
                 all_out.append(
                     {
-                        "bbox": batch_dict["bbox"][b_idx, idx].float().cpu().numpy(),
+                        "bbox": batch_dict["bbox"][b_idx, idx].cpu().float().numpy(),
                         "focal_length": out["focal_length"][b_idx * num_objects + idx],
                         "pred_keypoints_3d": out["pred_keypoints_3d"][b_idx * num_objects + idx],
                         "pred_keypoints_2d": out["pred_keypoints_2d"][b_idx * num_objects + idx],

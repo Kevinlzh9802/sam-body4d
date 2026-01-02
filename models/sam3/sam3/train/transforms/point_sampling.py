@@ -270,12 +270,12 @@ class RandomGeometricInputsAPI:
                 # on CPU and so I don't think it should matter.
                 if self.sample_box_scale_factor != 1.0:
                     sample_box = rescale_box_xyxy(
-                        box.numpy(), self.sample_box_scale_factor, mask.shape
+                        box.float().numpy(), self.sample_box_scale_factor, mask.shape
                     )
                 else:
-                    sample_box = box.numpy()
+                    sample_box = box.float().numpy()
                 input_points = sample_points_from_mask(
-                    mask.numpy(),
+                    mask.float().numpy(),
                     n_points,
                     self.point_sample_mode,
                     sample_box,

@@ -154,7 +154,7 @@ def _new_shuffle_tensor_slice(
     if drop_count:
         warnings.warn(f"# of dropped samples: {drop_count}", stacklevel=1)
     indices = torch.randperm(count, dtype=dtype, generator=generator)
-    return tensor[start::step][indices].numpy()
+    return tensor[start::step][indices].float().numpy()
 
 
 def _make_seed(seed: int, start: int, iter_count: int) -> int:

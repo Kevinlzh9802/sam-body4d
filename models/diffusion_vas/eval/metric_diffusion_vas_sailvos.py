@@ -53,7 +53,7 @@ def resize_masks_and_encode_union_modal(pred_rles, input_shape, new_shape, modal
     for i in range(masks.shape[2]):  # iterating over the third dimension which has size 25
         resized_masks[0, 0, i] = cv2.resize(masks[0, 0, i], (1280, 800), interpolation=cv2.INTER_LINEAR)
 
-    modal_pixels_np = modal_pixels.numpy().astype(np.uint8)
+    modal_pixels_np = modal_pixels.float().numpy().astype(np.uint8)
     resized_masks = np.logical_or(resized_masks, modal_pixels_np).astype(np.uint8)
     new_rles = [convert_masks_to_rle(resized_masks[:, :, t, :, :]) for t in range(masks.shape[2])]
 
@@ -88,8 +88,8 @@ def get_metrics_for_diffusion_vas(val_loader, pred_annot_path, input_shape=(128,
 
         modal_pixels, label_data = convert_pixels_to_masks(modal_pixels), convert_pixels_to_masks(amodal_pixels)
 
-        modal_masks = modal_pixels.numpy().astype(int).squeeze(0).squeeze(0)
-        amodal_masks = label_data.numpy().astype(int).squeeze(0).squeeze(0)
+        modal_masks = modal_pixels.float().numpy().astype(int).squeeze(0).squeeze(0)
+        amodal_masks = label_data.float().numpy().astype(int).squeeze(0).squeeze(0)
 
         intersection = (amodal_masks & modal_masks).sum(axis=(1, 2))  # Sum over spatial dimensions (800, 1280)
         union = (amodal_masks | modal_masks).sum(axis=(1, 2))

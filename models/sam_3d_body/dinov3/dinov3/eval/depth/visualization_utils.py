@@ -42,7 +42,7 @@ def normalized_tensor_to_pil(
 
 def depth_tensor_to_colorized_pil(depth_tensor: torch.Tensor, cmap="plasma", vmin=None, vmax=None):
     # derived from https://github.com/zhyever/Monocular-Depth-Estimation-Toolbox/blob/main/depth/utils/color_depth.py
-    value = depth_tensor.detach().cpu().reshape(depth_tensor.shape[-2:]).numpy()
+    value = depth_tensor.detach().cpu().reshape(depth_tensor.shape[-2:]).float().numpy()
     # normalize
     vmin = value.min() if vmin is None else vmin
     vmax = value.max() if vmax is None else vmax

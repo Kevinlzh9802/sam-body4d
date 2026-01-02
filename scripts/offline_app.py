@@ -148,7 +148,7 @@ class offline_app:
             propagate_preflight=True,
         ):
             video_segments[frame_idx] = {
-                out_obj_id: (video_res_masks[i] > 0.0).float().cpu().numpy()
+                out_obj_id: (video_res_masks[i] > 0.0).cpu().float().numpy()
                 for i, out_obj_id in enumerate(self.RUNTIME['out_obj_ids'])
             } 
 
@@ -174,7 +174,7 @@ class offline_app:
                 align_corners=False,
             ).squeeze(0)
             img = img.permute(1, 2, 0)
-            img = (img.numpy() * 255).astype("uint8")
+            img = (img.float().numpy() * 255).astype("uint8")
             img_pil = Image.fromarray(img).convert('RGB')
             msk = np.zeros_like(img[:, :, 0])
             for out_obj_id, out_mask in video_segments[out_frame_idx].items():
@@ -378,7 +378,7 @@ class offline_app:
                     modal_pixels_current = modal_pixels_current[:, i:i + batch_size, :, :, :]
                     modal_pixels_current = modal_pixels_current[:, start:end]
                     pred_amodal_masks_current = pred_amodal_masks_dict[obj_id][start:end]
-                    modal_mask_union = (modal_pixels_current[0, :, 0, :, :].float().cpu().numpy() > 0).astype('uint8')
+                    modal_mask_union = (modal_pixels_current[0, :, 0, :, :].cpu().float().numpy() > 0).astype('uint8')
                     pred_amodal_masks_current = np.logical_or(pred_amodal_masks_current, modal_mask_union).astype('uint8')
                     pred_amodal_masks_tensor = torch.from_numpy(np.where(pred_amodal_masks_current == 0, -1, 1)).float().unsqueeze(0).unsqueeze(
                         2).repeat(1, 1, 3, 1, 1)

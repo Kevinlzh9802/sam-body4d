@@ -2273,12 +2273,12 @@ class SAM3DBody(BaseModel):
         """Get hand bbox from the hand detector"""
         pred_left_hand_box = (
             # NumPy doesn't support BF16. Cast to FP32 before converting.
-            pose_output["mhr"]["hand_box"][:, 0].detach().float().float().cpu().numpy()
+            pose_output["mhr"]["hand_box"][:, 0].detach().float().cpu().float().numpy()
             * self.cfg.MODEL.IMAGE_SIZE[0]
         )
         pred_right_hand_box = (
             # NumPy doesn't support BF16. Cast to FP32 before converting.
-            pose_output["mhr"]["hand_box"][:, 1].detach().float().float().cpu().numpy()
+            pose_output["mhr"]["hand_box"][:, 1].detach().float().cpu().float().numpy()
             * self.cfg.MODEL.IMAGE_SIZE[0]
         )
 
@@ -2299,20 +2299,20 @@ class SAM3DBody(BaseModel):
         for bi in range(batch_size):
             batch["left_scale"][bi*num_objects:(bi+1)*num_objects] = (
                 batch["left_scale"][bi*num_objects:(bi+1)*num_objects]
-                / batch["affine_trans"][bi, :, 0, 0].float().cpu().numpy()[:, None]
+                / batch["affine_trans"][bi, :, 0, 0].cpu().float().numpy()[:, None]
             )
             batch["right_scale"][bi*num_objects:(bi+1)*num_objects] = (
                 batch["right_scale"][bi*num_objects:(bi+1)*num_objects]
-                / batch["affine_trans"][bi, :, 0, 0].float().cpu().numpy()[:, None]
+                / batch["affine_trans"][bi, :, 0, 0].cpu().float().numpy()[:, None]
             )
             batch["left_center"][bi*num_objects:(bi+1)*num_objects] = (
                 batch["left_center"][bi*num_objects:(bi+1)*num_objects]
-                - batch["affine_trans"][bi, :, [0, 1], [2, 2]].float().cpu().numpy()
-            ) / batch["affine_trans"][bi, :, 0, 0].float().cpu().numpy()[:, None]
+                - batch["affine_trans"][bi, :, [0, 1], [2, 2]].cpu().float().numpy()
+            ) / batch["affine_trans"][bi, :, 0, 0].cpu().float().numpy()[:, None]
             batch["right_center"][bi*num_objects:(bi+1)*num_objects] = (
                 batch["right_center"][bi*num_objects:(bi+1)*num_objects]
-                - batch["affine_trans"][bi, :, [0, 1], [2, 2]].float().cpu().numpy()
-            ) / batch["affine_trans"][bi, :, 0, 0].float().cpu().numpy()[:, None]
+                - batch["affine_trans"][bi, :, [0, 1], [2, 2]].cpu().float().numpy()
+            ) / batch["affine_trans"][bi, :, 0, 0].cpu().float().numpy()[:, None]
 
         left_xyxy = np.concatenate(
             [

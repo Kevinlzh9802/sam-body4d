@@ -128,7 +128,7 @@ class LogRegModule(nn.Module):
         samples_device = samples.device
         samples = samples.to(dtype=self.dtype, device=self.device)
         if self.device == _CPU_DEVICE:
-            samples = samples.numpy()
+            samples = samples.float().numpy()
         probas = self.estimator.predict_proba(samples)
         return {"preds": torch.from_numpy(probas).to(samples_device), "target": targets}
 
@@ -137,8 +137,8 @@ class LogRegModule(nn.Module):
         train_labels = train_labels.to(dtype=self.dtype, device=self.device)
         if self.device == _CPU_DEVICE:
             # both cuml and sklearn only work with numpy arrays on CPU
-            train_features = train_features.numpy()
-            train_labels = train_labels.numpy()
+            train_features = train_features.float().numpy()
+            train_labels = train_labels.float().numpy()
         self.estimator.fit(train_features, train_labels)
 
 

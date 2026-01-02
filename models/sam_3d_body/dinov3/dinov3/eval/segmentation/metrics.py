@@ -50,7 +50,7 @@ def calculate_segmentation_metrics(
     df = pd.DataFrame(
         {
             "Class Index": np.arange(len(metrics_dict["mIoU"])),
-            "mIoU": 100 * metrics_dict["mIoU"].float().cpu().numpy(),
+            "mIoU": 100 * metrics_dict["mIoU"].cpu().float().numpy(),
         }
     )
     logger.info(f"mIoU per class:\n{df.to_string(index=False)}")

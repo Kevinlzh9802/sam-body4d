@@ -25,8 +25,8 @@ def get_metrics_for_modal(val_loader, lo_thresh=0, hi_thresh=1):
     loader_iter = iter(val_loader)
     for batch_idx, batch_data in enumerate(tqdm(loader_iter, ncols=0)):
 
-        gt_amodal_bboxes = batch_data['amodal_bboxes'][0].detach().float().cpu().numpy()
-        modal_pixels = (batch_data['modal_res'][0,:,0,:,:].detach().float().cpu().numpy() + 1) // 2
+        gt_amodal_bboxes = batch_data['amodal_bboxes'][0].detach().cpu().float().numpy()
+        modal_pixels = (batch_data['modal_res'][0,:,0,:,:].detach().cpu().float().numpy() + 1) // 2
         gt_modal_bboxes = [get_bbox_from_mask(modal_pixels[i]) for i in range(len(modal_pixels))]
 
 
@@ -65,12 +65,12 @@ def get_metrics_for_diffusion_vas(val_loader, pred_annot_path, track_ids, lo_thr
 
     loader_iter = iter(val_loader)
     for batch_idx, batch_data in enumerate(tqdm(loader_iter, ncols=0)):
-        gt_amodal_bboxes = batch_data['amodal_bboxes'][0].detach().float().cpu().numpy()
+        gt_amodal_bboxes = batch_data['amodal_bboxes'][0].detach().cpu().float().numpy()
         vid_id = batch_data['vid_id']
         rel_track_id = int(batch_data['track_id']) - track_ids[str(int(vid_id))] + 1
         file_names = batch_data['image_file_names']
 
-        modal_pixels = (batch_data['modal_res'][0, :, 0, :, :].detach().float().cpu().numpy() + 1) // 2
+        modal_pixels = (batch_data['modal_res'][0, :, 0, :, :].detach().cpu().float().numpy() + 1) // 2
         gt_modal_bboxes = [get_bbox_from_mask(modal_pixels[i]) for i in range(len(modal_pixels))]
         check_result = np.mean([compute_iou(gt_amodal_bboxes[i], gt_modal_bboxes[i]) for i in range(len(gt_amodal_bboxes))])
         if check_result < lo_thresh or check_result > hi_thresh:

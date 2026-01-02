@@ -190,7 +190,7 @@ class Resize(object):
                 # sample["semseg_mask"] = cv2.resize(
                 #     sample["semseg_mask"], (width, height), interpolation=cv2.INTER_NEAREST
                 # )
-                sample["semseg_mask"] = F.interpolate(torch.from_numpy(sample["semseg_mask"]).float()[None, None, ...], (height, width), mode='nearest').numpy()[0, 0]
+                sample["semseg_mask"] = F.interpolate(torch.from_numpy(sample["semseg_mask"]).float()[None, None, ...], (height, width), mode='nearest').float().numpy()[0, 0]
                 
             if "mask" in sample:
                 sample["mask"] = cv2.resize(

@@ -225,8 +225,8 @@ def sample_one_point_from_error_center_slow(gt_masks, pred_masks, padding=True):
     # positive label to correct the FN error
     fn_masks = gt_masks & ~pred_masks
 
-    fp_masks = fp_masks.float().cpu().numpy()
-    fn_masks = fn_masks.float().cpu().numpy()
+    fp_masks = fp_masks.cpu().float().numpy()
+    fn_masks = fn_masks.cpu().float().numpy()
     points = torch.zeros(B, 1, 2, dtype=torch.float)
     labels = torch.ones(B, 1, dtype=torch.int32)
     for b in range(B):

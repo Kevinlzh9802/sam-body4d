@@ -113,7 +113,7 @@ def dilation(mask, kernel_size):
         result = torch.nn.functional.conv2d(result, k.transpose(-1, -2), padding="same")
         return result.view_as(mask) > 0
 
-    all_masks = mask.view(-1, mask.size(-2), mask.size(-1)).numpy().astype(np.uint8)
+    all_masks = mask.view(-1, mask.size(-2), mask.size(-1)).float().numpy().astype(np.uint8)
     kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
 
     import cv2
@@ -238,7 +238,7 @@ def robust_rle_encode(masks):
     try:
         return rle_encode(masks)
     except RuntimeError as _:
-        masks = masks.float().cpu().numpy()
+        masks = masks.cpu().float().numpy()
         rles = [
             mask_util.encode(
                 np.array(mask[:, :, np.newaxis], dtype=np.uint8, order="F")

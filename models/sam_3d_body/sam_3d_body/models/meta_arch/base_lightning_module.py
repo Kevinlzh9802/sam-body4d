@@ -28,7 +28,7 @@ class BaseLightningModule(pl.LightningModule):
                 img = img_tensor
                 if dataformats.upper() == "CHW":
                     # If in PyTorch format (C,H,W), convert to (H,W,C) for wandb
-                    img = img_tensor.permute(1, 2, 0).float().cpu().numpy()
+                    img = img_tensor.permute(1, 2, 0).cpu().float().numpy()
                 logger.experiment.log({name: wandb.Image(img), "step": step})
             elif isinstance(logger, TensorBoardLogger):
                 logger.experiment.add_image(

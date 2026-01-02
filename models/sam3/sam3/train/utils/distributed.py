@@ -178,7 +178,7 @@ def all_gather(data, force_cpu=False, force_filesys=False, filesys_save_dir=None
     data_list = []
     for size, tensor in zip(size_list, tensor_list):
         tensor = torch.split(tensor, [size, max_size - size], dim=0)[0]
-        buffer = io.BytesIO(tensor.float().cpu().numpy())
+        buffer = io.BytesIO(tensor.cpu().float().numpy())
         obj = torch.load(buffer, weights_only=False)
         data_list.append(obj)
 
@@ -438,14 +438,14 @@ def broadcast_object(obj: Any, src: int = _PRIMARY_RANK, use_disk: bool = True) 
         data_tensor = broadcast(data_tensor, src=src)
         if use_disk:
             with tempfile.TemporaryFile("r+b") as f:
-                f.write(data_tensor.numpy())
+                f.write(data_tensor.float().numpy())
                 # remove reference to the data tensor and hope that Python garbage
                 # collects it
                 del data_tensor
                 f.seek(0)
                 obj = torch.load(f, weights_only=False)
         else:
-            buffer = io.BytesIO(data_tensor.numpy())
+            buffer = io.BytesIO(data_tensor.float().numpy())
             obj = torch.load(buffer, weights_only=False)
     return obj
 

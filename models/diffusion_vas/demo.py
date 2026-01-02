@@ -134,7 +134,7 @@ def rgb_to_depth(rgb_tensor, depth_model):
 
     # Loop through each frame in the tensor
     for i in range(rgb_images.shape[0]):
-        rgb_image_np = rgb_images[i].float().cpu().numpy().astype(np.uint8).transpose(1, 2, 0)
+        rgb_image_np = rgb_images[i].cpu().float().numpy().astype(np.uint8).transpose(1, 2, 0)
         depth_map = depth_model.infer_image(rgb_image_np)
         depth_maps.append(depth_map)
 
@@ -260,7 +260,7 @@ def main(args):
     pred_amodal_masks = (pred_amodal_masks.sum(axis=-1) > 600).astype('uint8')
     
     # save pred_amodal_masks
-    modal_mask_union = (modal_pixels[0, :, 0, :, :].float().cpu().numpy() > 0).astype('uint8')
+    modal_mask_union = (modal_pixels[0, :, 0, :, :].cpu().float().numpy() > 0).astype('uint8')
     pred_amodal_masks = np.logical_or(pred_amodal_masks, modal_mask_union).astype('uint8')
 
     pred_amodal_masks_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_NEAREST)
@@ -278,7 +278,7 @@ def main(args):
     tmp_cmap_idx = np.random.randint(0, plt.get_cmap("tab10").N)
     rgb_pixels_save = np.array(
         [cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR) for frame in
-         rgb_pixels[0].float().cpu().numpy().transpose(0, 2, 3, 1)])
+         rgb_pixels[0].cpu().float().numpy().transpose(0, 2, 3, 1)])
 
     amodal_masks_overlay = []
     for i in range(25):
@@ -287,7 +287,7 @@ def main(args):
         amodal_masks_overlay.append(tmp_rgb_amodal)
     modal_mask_union = np.array(
         [cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_NEAREST) for frame in
-         modal_obj_mask[0, :, 0, :, :].float().cpu().numpy().astype(np.uint8)])
+         modal_obj_mask[0, :, 0, :, :].cpu().float().numpy().astype(np.uint8)])
 
     # save amodal_masks_overlay
     amodal_masks_overlay_np = np.stack(amodal_masks_overlay, axis=0)
@@ -307,7 +307,7 @@ def main(args):
     modal_rgb_pixels = rgb_pixels * modal_obj_mask + modal_background
     modal_rgb_pixels_save = np.array(
         [cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR) for frame in
-         modal_rgb_pixels[0].float().cpu().numpy().transpose(0, 2, 3, 1)])
+         modal_rgb_pixels[0].cpu().float().numpy().transpose(0, 2, 3, 1)])
     imageio.mimsave(modal_rgb_path, (modal_rgb_pixels_save * 255).astype(np.uint8), fps=8)
 
     modal_rgb_pixels = modal_rgb_pixels * 2 - 1
@@ -349,7 +349,7 @@ def main(args):
     # save modal_rgb_overlay
     modal_pixels = np.array(
         [cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_NEAREST) for frame in
-         modal_pixels[0].float().cpu().numpy().transpose(0, 2, 3, 1)])
+         modal_pixels[0].cpu().float().numpy().transpose(0, 2, 3, 1)])
     modal_rgb_overlay = np.where(np.array((modal_pixels > 0)[:, :, :, :]) == 1, raw_rgb_pixels, raw_rgb_semi_transparent)
     imageio.mimsave(modal_rgb_overlay_path, modal_rgb_overlay, format='GIF', fps=8)
 

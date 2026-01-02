@@ -22,7 +22,7 @@ def get_light_poses(n_lights=5, elevation=np.pi / 3, dist=12):
     trans = make_translation(torch.tensor([0, 0, dist]))
     for phi, theta in zip(phis, thetas):
         rot = make_rotation(rx=-theta, ry=phi, order="xyz")
-        poses.append((rot @ trans).numpy())
+        poses.append((rot @ trans).float().numpy())
     return poses
 
 
