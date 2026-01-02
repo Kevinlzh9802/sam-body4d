@@ -96,6 +96,28 @@ apptainer exec --nv \
 - **Verify install location**: `apptainer exec body4d.sif python -c "import sam3; print(sam3.__file__)"`.
 - **If you bind-mount the repo** over the image’s `/opt/sam-body4d`, you can accidentally “hide” the code the editable install points to. Either don’t bind-mount the repo, or bind it to a different path.
 
+#### Fast repro for the BF16 sparse CUDA error (SAM-3D-Body / MHR)
+
+If you see:
+`RuntimeError: "addmm_sparse_cuda" not implemented for 'BFloat16'`
+you can reproduce (and verify the fix) without running the full pipeline:
+
+```bash
+apptainer exec --nv --bind /path/to/checkpoints:/checkpoints body4d.sif \
+  python scripts/test_mhr_bf16_issue.py --mhr /checkpoints/sam-3d-body-dinov3/assets/mhr_model.pt --device cuda
+```
+
+This should show FP32 succeeding and BF16 failing. The typical fix is to force MHR (or all SAM-3D-Body inference) to run in FP32.
+
+#### SAM3-only smoke test
+
+To confirm SAM3 is installed and can build a model from checkpoint (without running SAM-Body4D):
+
+```bash
+apptainer exec --nv --bind /path/to/checkpoints:/checkpoints body4d.sif \
+  python scripts/test_sam3_only.py --ckpt /checkpoints/sam3/sam3.pt --device cuda
+```
+
 
 ## 🚀 Run the Demo
 
