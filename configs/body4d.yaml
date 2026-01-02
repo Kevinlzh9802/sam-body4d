@@ -52,7 +52,7 @@ runtime:
 # ---------------------------------------------------------------------------
 completion:
   # Enable occlusion-aware completion module (slower but more robust)
-  enable: true
+  enable: false
 
   # Resolution used for detection and completion
   detection_resolution: [512, 1024]
