@@ -65,10 +65,10 @@ def associate_det_trk(
         igeit_any_dim_1 = igeit.any(dim=1)
         igeit_trk = iou >= iou_threshold_trk
 
-        iou_list = iou.cpu().numpy().tolist()
-        igeit_list = igeit.cpu().numpy().tolist()
-        igeit_any_dim_1_list = igeit_any_dim_1.cpu().numpy().tolist()
-        igeit_trk_list = igeit_trk.cpu().numpy().tolist()
+        iou_list = iou.float().cpu().numpy().tolist()
+        igeit_list = igeit.float().cpu().numpy().tolist()
+        igeit_any_dim_1_list = igeit_any_dim_1.float().cpu().numpy().tolist()
+        igeit_trk_list = igeit_trk.float().cpu().numpy().tolist()
 
         det_scores_list = (
             det_scores
@@ -84,7 +84,7 @@ def associate_det_trk(
             return list(range(det_masks.size(0))), [], {}
 
         # Hungarian matching: maximize IoU for tracks
-        cost_matrix = 1 - iou.cpu().numpy()  # Hungarian solves for minimum cost
+        cost_matrix = 1 - iou.float().cpu().numpy()  # Hungarian solves for minimum cost
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
         def branchy_hungarian_better_uses_the_cpu(

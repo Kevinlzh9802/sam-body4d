@@ -28,9 +28,9 @@ def align_depth_least_square(
         assert isinstance(gt_arr, torch.Tensor) and isinstance(valid_mask_arr, torch.Tensor)
         pred_arr = pred_arr.to(torch.float32)  # unsupported other types
         device = gt_arr.device
-        gt_arr = gt_arr.detach().cpu().numpy()
-        pred_arr = pred_arr.detach().cpu().numpy()
-        valid_mask_arr = valid_mask_arr.detach().cpu().numpy()
+        gt_arr = gt_arr.detach().float().cpu().numpy()
+        pred_arr = pred_arr.detach().float().cpu().numpy()
+        valid_mask_arr = valid_mask_arr.detach().float().cpu().numpy()
 
     gt = gt_arr.squeeze()  # [H, W]
     pred = pred_arr.squeeze()

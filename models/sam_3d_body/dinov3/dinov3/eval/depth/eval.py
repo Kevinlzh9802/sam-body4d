@@ -199,13 +199,13 @@ def evaluate_depther_with_dataloader(
         all_metric_values = torch.cat(distributed.gather_all_tensors(all_metric_values), dim=1)
 
     final_metric_values = all_metric_values.nanmean(1)
-    final_metric_values_dict = dict(zip(metric_names, final_metric_values.cpu().numpy()))
+    final_metric_values_dict = dict(zip(metric_names, final_metric_values.float().cpu().numpy()))
 
     if reduce_results:
         out_results_dict = {k: float(v) for (k, v) in final_metric_values_dict.items()}
     else:
         out_results_dict = {
-            metric_name: value for (metric_name, value) in zip(metric_names, all_metric_values.cpu().numpy().tolist())
+            metric_name: value for (metric_name, value) in zip(metric_names, all_metric_values.float().cpu().numpy().tolist())
         }
     logger.info(
         "Final scores: " + " ".join([f"{name}: {meter:.3f}" for name, meter in final_metric_values_dict.items()])

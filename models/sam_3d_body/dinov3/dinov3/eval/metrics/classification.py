@@ -251,7 +251,7 @@ class GroupByAnyMatchAccuracy(AnyMatchAccuracy):
 
     def compute(self) -> Tensor:
         tp = dim_zero_cat(self.tp).float()  # type: ignore
-        indices = dim_zero_cat(self.indices).cpu().numpy()  # type: ignore
+        indices = dim_zero_cat(self.indices).float().cpu().numpy()  # type: ignore
         global_score = tp.mean()
         results_dict = {"top-1": global_score}
         for label_name, label_value in self._groupby_labels.items():

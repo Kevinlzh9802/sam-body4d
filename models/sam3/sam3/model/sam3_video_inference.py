@@ -512,10 +512,10 @@ class Sam3VideoInference(Sam3VideoBase):
             ) > 0
 
         outputs = {
-            "out_obj_ids": out_obj_ids.cpu().numpy(),
-            "out_probs": out_probs.cpu().numpy(),
-            "out_boxes_xywh": out_boxes_xywh.cpu().numpy(),
-            "out_binary_masks": out_binary_masks.cpu().numpy(),
+            "out_obj_ids": out_obj_ids.float().cpu().numpy(),
+            "out_probs": out_probs.float().cpu().numpy(),
+            "out_boxes_xywh": out_boxes_xywh.float().cpu().numpy(),
+            "out_binary_masks": out_binary_masks.float().cpu().numpy(),
             "frame_stats": out.get("frame_stats", None),
         }
         return outputs

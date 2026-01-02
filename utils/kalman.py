@@ -57,7 +57,7 @@ def ema_smooth_global_rot_per_obj_id_adaptive(
     assert B % num_frames == 0, "B must be divisible by num_frames"
     num_humans = B // num_frames
 
-    rot_np = rot.detach().cpu().numpy()  # (B, 3)
+    rot_np = rot.detach().float().cpu().numpy()  # (B, 3)
     frames_all = np.arange(num_frames, dtype=int)
 
     # global thresholds for "always moving" humans
@@ -421,7 +421,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
         B, D = param.shape
         assert B == B_total, f"Inconsistent B for key {k}"
 
-        param_np = param.detach().cpu().numpy()  # (B, D)
+        param_np = param.detach().float().cpu().numpy()  # (B, D)
 
         for obj_id in range(1, num_humans + 1):
             slot = obj_id - 1  # 0-based index within each frame
@@ -717,8 +717,8 @@ def smooth_scale_shape_local(mhr, num_frames, window=9,
     assert B % num_frames == 0, "B must be divisible by num_frames"
     num_humans = B // num_frames
 
-    scale_np = scale.detach().cpu().numpy().reshape(num_frames, num_humans, D_scale)
-    shape_np = shape.detach().cpu().numpy().reshape(num_frames, num_humans, D_shape)
+    scale_np = scale.detach().float().cpu().numpy().reshape(num_frames, num_humans, D_scale)
+    shape_np = shape.detach().float().cpu().numpy().reshape(num_frames, num_humans, D_shape)
 
     # Optional visibility weights per frame (shared across humans)
     if vis_scale is not None:

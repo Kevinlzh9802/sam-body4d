@@ -87,7 +87,7 @@ def run_detectron2_vitdet(
     if valid_idx.sum() == 0 and default_to_full_image:
         boxes = np.array([0, 0, width, height]).reshape(1, 4)
     else:
-        boxes = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
+        boxes = det_instances.pred_boxes.tensor[valid_idx].float().cpu().numpy()
 
     # Sort boxes to keep a consistent output order
     sorted_indices = np.lexsort(

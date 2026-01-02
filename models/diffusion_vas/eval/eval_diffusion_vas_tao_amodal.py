@@ -104,7 +104,7 @@ def convert_rgb_to_depth2(rgb_images, depth_model):
 
 
     # Convert the RGB images to depth maps
-    depth_maps = [depth_model.infer_image(rgb_image.cpu().numpy()[0]) for rgb_image in rgb_images]
+    depth_maps = [depth_model.infer_image(rgb_image.float().cpu().numpy()[0]) for rgb_image in rgb_images]
 
     depth_maps = np.array(depth_maps)
     # Normalize the depth maps to the range [0, 1]
@@ -170,7 +170,7 @@ def eval_diffusion_vas_on_tao_amodal(args):
         modal_pixels = batch_data["modal_res"]
         rgb_imgs = batch_data['rgb_res']
         amodal_bboxes = batch_data["amodal_bboxes"][0].detach().cpu()
-        modal_pixels2 = (batch_data['modal_res'][0, :, 0, :, :].detach().cpu().numpy() + 1) // 2
+        modal_pixels2 = (batch_data['modal_res'][0, :, 0, :, :].detach().float().cpu().numpy() + 1) // 2
         modal_bboxes = [get_bbox_from_mask(modal_pixels2[i]) for i in range(len(modal_pixels2))]
         vid_id = batch_data['vid_id']
         rel_track_id = int(batch_data['track_id']) - track_ids[str(int(vid_id))] + 1
@@ -179,7 +179,7 @@ def eval_diffusion_vas_on_tao_amodal(args):
 
 
         # preprocess the modal pixels
-        modal_pixels_np = modal_pixels.detach().cpu().numpy()
+        modal_pixels_np = modal_pixels.detach().float().cpu().numpy()
         modal_pixels_np = (modal_pixels_np + 1) / 2
         pad_height, pad_width = ori_h // 4, ori_w // 4
         padded_h, padded_w = ori_h + 2 * pad_height, ori_w + 2 * pad_width

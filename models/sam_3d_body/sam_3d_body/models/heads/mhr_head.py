@@ -379,7 +379,7 @@ class MHRHead(nn.Module):
             "pred_joint_coords": (
                 jcoords.reshape(batch_size, -1, 3) if jcoords is not None else None
             ),
-            "faces": self.faces.cpu().numpy(),
+            "faces": self.faces.float().cpu().numpy(),
             "joint_global_rots": joint_global_rots,
             "mhr_model_params": mhr_model_params,
         }

@@ -178,7 +178,7 @@ def all_gather(data, force_cpu=False, force_filesys=False, filesys_save_dir=None
     data_list = []
     for size, tensor in zip(size_list, tensor_list):
         tensor = torch.split(tensor, [size, max_size - size], dim=0)[0]
-        buffer = io.BytesIO(tensor.cpu().numpy())
+        buffer = io.BytesIO(tensor.float().cpu().numpy())
         obj = torch.load(buffer, weights_only=False)
         data_list.append(obj)
 

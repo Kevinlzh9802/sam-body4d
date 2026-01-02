@@ -19,7 +19,7 @@ def connected_components_cpu_single(values: torch.Tensor):
     assert values.dim() == 2
     from skimage.measure import label
 
-    labels, num = label(values.cpu().numpy(), return_num=True)
+    labels, num = label(values.float().cpu().numpy(), return_num=True)
     labels = torch.from_numpy(labels)
     counts = torch.zeros_like(labels)
     for i in range(1, num + 1):

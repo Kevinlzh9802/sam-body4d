@@ -157,10 +157,10 @@ class HungarianMatcher(nn.Module):
             + self.cost_class * cost_class
             + self.cost_giou * cost_giou
         )
-        C = C.view(bs, num_queries, -1).cpu().numpy()
+        C = C.view(bs, num_queries, -1).float().cpu().numpy()
 
         sizes = torch.cumsum(batched_targets["num_boxes"], -1)[:-1]
-        costs = [c[i] for i, c in enumerate(np.split(C, sizes.cpu().numpy(), axis=-1))]
+        costs = [c[i] for i, c in enumerate(np.split(C, sizes.float().cpu().numpy(), axis=-1))]
         indices = [_do_matching(c) for c in costs]
         batch_idx = torch.as_tensor(
             sum([[i] * len(src) for i, src in enumerate(indices)], []), dtype=torch.long
@@ -252,10 +252,10 @@ class BinaryHungarianMatcher(nn.Module):
             + self.cost_class * cost_class
             + self.cost_giou * cost_giou
         )
-        C = C.view(bs, num_queries, -1).cpu().numpy()
+        C = C.view(bs, num_queries, -1).float().cpu().numpy()
 
         sizes = torch.cumsum(batched_targets["num_boxes"], -1)[:-1]
-        costs = [c[i] for i, c in enumerate(np.split(C, sizes.cpu().numpy(), axis=-1))]
+        costs = [c[i] for i, c in enumerate(np.split(C, sizes.float().cpu().numpy(), axis=-1))]
         return_tgt_indices = False
         for c in costs:
             n_targ = c.shape[1]
@@ -392,10 +392,10 @@ class BinaryFocalHungarianMatcher(nn.Module):
             + self.cost_class * cost_class
             + self.cost_giou * cost_giou
         )
-        C = C.view(bs, num_queries, -1).cpu().numpy()
+        C = C.view(bs, num_queries, -1).float().cpu().numpy()
 
         sizes = torch.cumsum(batched_targets["num_boxes"], -1)[:-1]
-        costs = [c[i] for i, c in enumerate(np.split(C, sizes.cpu().numpy(), axis=-1))]
+        costs = [c[i] for i, c in enumerate(np.split(C, sizes.float().cpu().numpy(), axis=-1))]
         return_tgt_indices = False
         for c in costs:
             n_targ = c.shape[1]
@@ -611,7 +611,7 @@ class BinaryHungarianMatcherV2(nn.Module):
             C = torch.where(out_is_valid[:, :, None], C, 1e9)
         if target_is_valid_padded is not None:
             C = torch.where(target_is_valid_padded[:, None, :], C, 1e9)
-        C = C.cpu().numpy()
+        C = C.float().cpu().numpy()
         costs = [C[i, :, :s] for i, s in enumerate(num_boxes.tolist())]
         return_tgt_indices = (
             do_filtering or torch.any(num_queries < num_boxes * max(repeats, 1)).item()

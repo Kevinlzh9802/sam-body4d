@@ -302,7 +302,7 @@ class PolygonMasks:
             # are supposed to be small tensors.
             # May need to change this assumption if GPU placement becomes useful
             if isinstance(t, torch.Tensor):
-                t = t.cpu().numpy()
+                t = t.float().cpu().numpy()
             return np.asarray(t).astype("float64")
 
         def process_polygons(
@@ -386,9 +386,9 @@ class PolygonMasks:
             # Polygons is a list, so we have to move the indices back to CPU.
             if item.dtype == torch.bool:
                 assert item.dim() == 1, item.shape
-                item = item.nonzero().squeeze(1).cpu().numpy().tolist()
+                item = item.nonzero().squeeze(1).float().cpu().numpy().tolist()
             elif item.dtype in [torch.int32, torch.int64]:
-                item = item.cpu().numpy().tolist()
+                item = item.float().cpu().numpy().tolist()
             else:
                 raise ValueError(
                     "Unsupported tensor dtype={} for indexing!".format(item.dtype)
