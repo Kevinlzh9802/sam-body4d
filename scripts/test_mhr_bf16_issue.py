@@ -43,9 +43,16 @@ def _run_once(mhr: torch.nn.Module, device: torch.device, dtype: torch.dtype) ->
     # The exact shapes aren’t critical to reproduce the BF16 sparse op failure.
     # We choose small batch sizes to keep it fast.
     B = 1
-    shape_params = torch.zeros(B, 45, device=device, dtype=dtype)
-    model_params = torch.zeros(B, 207, device=device, dtype=dtype)
-    expr_params = torch.zeros(B, 72, device=device, dtype=dtype)
+    # NOTE: the TorchScript MHR model expects specific feature lengths.
+    # For the public MHR model shipped with SAM-3D-Body, the common expected sizes are:
+    # - identity_coeffs (shape): 45
+    # - model_parameters: 204  (so cat([model_parameters, zeros_like(identity)]) => 249)
+    # - expression_coeffs: 72
+    #
+    # If these defaults don't match your checkpoint, pass --shape-dim/--model-dim/--expr-dim.
+    shape_params = torch.zeros(B, _run_once.shape_dim, device=device, dtype=dtype)
+    model_params = torch.zeros(B, _run_once.model_dim, device=device, dtype=dtype)
+    expr_params = torch.zeros(B, _run_once.expr_dim, device=device, dtype=dtype)
 
     print(f"[INFO] Forward with dtype={dtype} ...")
     with torch.no_grad():
@@ -66,6 +73,9 @@ def main() -> int:
         choices=["cuda", "cpu"],
         help="Device to run on (cuda recommended to reproduce the error)",
     )
+    parser.add_argument("--shape-dim", type=int, default=45, help="Identity/shape coeff dim (default: 45)")
+    parser.add_argument("--model-dim", type=int, default=204, help="Model parameters dim (default: 204)")
+    parser.add_argument("--expr-dim", type=int, default=72, help="Expression coeff dim (default: 72)")
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -80,12 +90,21 @@ def main() -> int:
     mhr = _load_mhr(args.mhr, device)
     mhr.eval()
 
+    # Thread dims into _run_once without changing call sites too much.
+    _run_once.shape_dim = args.shape_dim  # type: ignore[attr-defined]
+    _run_once.model_dim = args.model_dim  # type: ignore[attr-defined]
+    _run_once.expr_dim = args.expr_dim  # type: ignore[attr-defined]
+
     # 1) Prove FP32 works (baseline)
     try:
         _run_once(mhr, device, torch.float32)
     except Exception:
         print("[FAIL] FP32 forward failed (unexpected).")
         traceback.print_exc()
+        print(
+            "[HINT] If you see an einsum size mismatch like 252 vs 249, your --model-dim is wrong.\n"
+            "       For example, if expected_n=249 and shape_dim=45, use --model-dim 204."
+        )
         return 3
 
     # 2) Try BF16 (expected failure on CUDA due to sparse op)
@@ -99,7 +118,7 @@ def main() -> int:
             traceback.print_exc()
             return 0
     else:
-        print("[INFO] CPU selected; BF16 sparse CUDA error won’t reproduce on CPU.")
+        print("[INFO] CPU selected; BF16 sparse CUDA error won't reproduce on CPU.")
 
     return 0
 
