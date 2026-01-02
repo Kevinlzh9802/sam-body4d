@@ -23,10 +23,12 @@ output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs
 
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 
-apptainer exec --nv \
-  --bind $neon_path:$bind_neon_path \
-  --bind $zli_path:$bind_zli_path \
-  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
-  --env PYOPENGL_PLATFORM=osmesa \
-  $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder
+# apptainer exec --nv \
+#   --bind $neon_path:$bind_neon_path \
+#   --bind $zli_path:$bind_zli_path \
+#   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
+#   --env PYOPENGL_PLATFORM=osmesa \
+#   $sif_path \
+#   python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder
+
+apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"

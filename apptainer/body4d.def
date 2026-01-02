@@ -78,6 +78,9 @@ From: ubuntu:22.04
     # Install the main repo (also editable so you can bind-mount and iterate if desired)
     python -m pip install -e /opt/sam-body4d
 
+    # update PyOpenGL
+    python -m pip install -U PyOpenGL PyOpenGL_accelerate
+    
     # Quick sanity check
     python /opt/sam-body4d/scripts/doctor_imports.py
 
