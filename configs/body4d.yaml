@@ -34,7 +34,7 @@ sam_3d_body:
   fov_path: ${paths.ckpt_root}/moge-2-vitl-normal/model.pt
 
   # Number of frames processed in parallel
-  batch_size: 64
+  batch_size: 16
 
   # Optional external detector / segmentor (leave empty to use defaults)
   detector_path: ""
@@ -52,7 +52,7 @@ runtime:
 # ---------------------------------------------------------------------------
 completion:
   # Enable occlusion-aware completion module (slower but more robust)
-  enable: true
+  enable: false
 
   # Resolution used for detection and completion
   detection_resolution: [512, 1024]
