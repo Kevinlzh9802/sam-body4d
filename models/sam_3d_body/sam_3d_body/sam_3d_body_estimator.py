@@ -155,8 +155,10 @@ class SAM3DBodyEstimator:
                     bboxes[i] is not None
                 ), "Mask-conditioned inference requires bboxes input!"
                 masks_binary = masks[i].reshape(-1, height, width, 1).astype(np.uint8)
+                # One score per PERSON (per box/mask), not per frame.
+                # `prepare_batch()` indexes masks_score by person index.
                 masks_score = np.ones(
-                    len(masks), dtype=np.float32
+                    masks_binary.shape[0], dtype=np.float32
                 )  # Set high confidence for provided masks
                 use_mask = True
             elif use_mask and self.sam is not None:
@@ -172,18 +174,26 @@ class SAM3DBodyEstimator:
                 padding_mask = masks_binary[0]
                 boxes_to_cat = []
                 masks_to_cat = []
+                scores_to_cat = [] if masks_score is not None else None
                 current_id_batch = id_batch[i]
                 cid = 0
                 for current_id in range(max_N):
                     if (current_id+1) in current_id_batch:
                         boxes_to_cat.append(boxes[cid])
                         masks_to_cat.append(masks_binary[cid])
+                        if scores_to_cat is not None:
+                            scores_to_cat.append(masks_score[cid])
                         cid += 1
                     else:
                         boxes_to_cat.append(padding_box)
                         masks_to_cat.append(padding_mask)
+                        # Padded entries are not real persons; set low confidence if used.
+                        if scores_to_cat is not None:
+                            scores_to_cat.append(np.float32(0.0))
                 boxes = np.stack(boxes_to_cat, axis=0)
                 masks_binary = np.stack(masks_to_cat, axis=0)
+                if scores_to_cat is not None:
+                    masks_score = np.asarray(scores_to_cat, dtype=np.float32)
                 # e.g., 1 2 4 5 6 -> 1 2 [1] 4 5 6
             img_com_dict = {}
             for idx_k, (idx_start,idx_end) in idx_dict.items():
