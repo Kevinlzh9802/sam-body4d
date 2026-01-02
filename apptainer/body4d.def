@@ -40,7 +40,11 @@ From: ubuntu:22.04
         libglib2.0-0 \
         libsm6 \
         libxext6 \
-        libxrender1
+        libxrender1 \
+        libosmesa6 \
+        libgl1 \
+        libglu1-mesa \
+        mesa-utils
     rm -rf /var/lib/apt/lists/*
 
     # --- micromamba install (static binary) ---

@@ -16,7 +16,7 @@ zli_path=/home/nfs/zli33
 bind_neon_path=/mnt/neon
 bind_zli_path=/mnt/zli33
 
-sif_path=$neon_path/apptainer/body4d-2.sif
+sif_path=$neon_path/apptainer/body4d_osmesa.sif
 project_folder=$bind_zli_path/projects/sam-body4d
 input_folder=$bind_neon_path/zonghuan/data/sam4d_body/inputs
 output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs
