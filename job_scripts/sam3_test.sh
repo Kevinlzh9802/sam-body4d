@@ -24,4 +24,4 @@ output_folder=$bind_neon_path/zonghuan/data/sam4d_body/outputs
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path \
   python $project_folder/scripts/test_sam3_only.py \
-    --ckpt $bind_neon_path/models/sam4d_checkpoints/sam3/sam3.pt --device cuda
+    --ckpt $bind_neon_path/models/sam4d_checkpoints/sam3/sam3.pt --device cuda --video $input_folder/cam04_cut_03.mp4
