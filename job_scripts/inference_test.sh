@@ -2,7 +2,7 @@
 #SBATCH --partition=insy,general # Request partition. Default is 'general' 
 #SBATCH --qos=short         # Request Quality of Service. Default is 'short' (maximum run time: 4 hours)
 #SBATCH --time=2:00:00      # Request run time (wall-clock). Default is 1 minute
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=1
 #SBATCH --ntasks=1          # Request number of parallel tasks per job. Default is 1
 #SBATCH --mem=64G
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
