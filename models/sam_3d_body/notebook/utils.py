@@ -222,6 +222,7 @@ def save_mesh_results(
     if outputs is None:
         return
 
+    os.makedirs(save_dir, exist_ok=True)
     for pid, person_output in enumerate(outputs):
         # Create renderer for this person
         renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
@@ -231,7 +232,9 @@ def save_mesh_results(
         tmesh = renderer.vertices_to_trimesh(
             person_output["pred_vertices"], person_output["pred_cam_t"], color
         )
-        mesh_path = f"{save_dir}/{pid+1}/{os.path.basename(image_path)[:-4]}.ply"
+        person_dir = os.path.join(save_dir, str(pid + 1))
+        os.makedirs(person_dir, exist_ok=True)
+        mesh_path = os.path.join(person_dir, f"{os.path.basename(image_path)[:-4]}.ply")
         tmesh.export(mesh_path)
 
 
