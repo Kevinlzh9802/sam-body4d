@@ -23,6 +23,11 @@ def load_sam_3d_body(checkpoint_path: str = "", device: str = "cuda", mhr_path: 
     # Disable face for inference
     model_cfg.defrost()
     model_cfg.MODEL.MHR_HEAD.MHR_MODEL_PATH = mhr_path
+
+    # Add these two lines:
+    model_cfg.TRAIN.USE_FP16 = False          # safest: full fp32
+    # model_cfg.TRAIN.FP16_TYPE = "float16"   # optional alternative if you want fp16 (not bf16)
+    
     model_cfg.freeze()
 
     # Initialze the model
