@@ -224,9 +224,27 @@ class MHRHead(nn.Module):
             # Zero out non-hand parameters
             model_params[:, self.nonhand_param_idxs] = 0
 
-        curr_skinned_verts, curr_skel_state = self.mhr(
-            shape_params, model_params, expr_params
-        )
+        # IMPORTANT:
+        # The MHR TorchScript model uses sparse CUDA ops (e.g. addmm_sparse_cuda) which are not
+        # implemented for BF16 in PyTorch. If the outer model runs with bf16 autocast / bf16 weights,
+        # inference can crash with:
+        #   RuntimeError: "addmm_sparse_cuda" not implemented for 'BFloat16'
+        #
+        # To make inference robust, force MHR to run in FP32 (no autocast) regardless of the rest
+        # of the pipeline precision.
+        if torch.cuda.is_available() and shape_params.is_cuda:
+            with torch.autocast(device_type="cuda", enabled=False):
+                curr_skinned_verts, curr_skel_state = self.mhr(
+                    shape_params.float(),
+                    model_params.float(),
+                    None if expr_params is None else expr_params.float(),
+                )
+        else:
+            curr_skinned_verts, curr_skel_state = self.mhr(
+                shape_params.float(),
+                model_params.float(),
+                None if expr_params is None else expr_params.float(),
+            )
         curr_joint_coords, curr_joint_quats, _ = torch.split(
             curr_skel_state, [3, 4, 1], dim=2
         )
