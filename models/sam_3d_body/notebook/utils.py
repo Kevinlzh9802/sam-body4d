@@ -228,11 +228,19 @@ def save_mesh_results(
         renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
 
         # Store individual mesh
-        color = tuple(c / 255.0 for c in color_list[id_current[pid]+4])
+        # Prefer saving by tracked object id (mask id), not by per-frame index.
+        # This keeps output folders stable across frames (e.g., 2/4/6/8).
+        obj_id = None
+        if id_current is not None and pid < len(id_current):
+            obj_id = int(id_current[pid])
+        else:
+            obj_id = int(pid + 1)
+
+        color = tuple(c / 255.0 for c in color_list[obj_id + 4])
         tmesh = renderer.vertices_to_trimesh(
             person_output["pred_vertices"], person_output["pred_cam_t"], color
         )
-        person_dir = os.path.join(save_dir, str(pid + 1))
+        person_dir = os.path.join(save_dir, str(obj_id))
         os.makedirs(person_dir, exist_ok=True)
         mesh_path = os.path.join(person_dir, f"{os.path.basename(image_path)[:-4]}.ply")
         tmesh.export(mesh_path)
