@@ -22,7 +22,7 @@ bind_model_path=/mnt/sam4d_checkpoints
 bind_data_path=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
 
-sif_path=$scratch_path/apptainer/body4d_osmesa.sif
+sif_path=$scratch_path/apptainers/body4d_osmesa.sif
 project_folder=$bind_home_path/projects/sam-body4d
 input_folder=$bind_data_path/inputs
 output_folder=$bind_data_path/outputs
