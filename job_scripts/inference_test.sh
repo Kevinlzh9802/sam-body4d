@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=insy,general # Request partition. Default is 'general' 
+#SBATCH --partition=innovation # Request partition. Default is 'general' 
 #SBATCH --qos=short         # Request Quality of Service. Default is 'short' (maximum run time: 4 hours)
 #SBATCH --time=2:00:00      # Request run time (wall-clock). Default is 1 minute
 #SBATCH --cpus-per-task=1
