@@ -526,7 +526,7 @@ Examples:
     
     # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
-    selected_boxes = [2, 4, 6, 8]
+    selected_boxes = [1, 3, 5, 7]
     for obj_id in selected_boxes:
         bbox = bboxes_kps_data[0]['bboxes'][obj_id]
         rel_box = bbox / [width, height, width, height]
