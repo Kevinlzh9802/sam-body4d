@@ -7,7 +7,7 @@
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
-#SBATCH --account=research-eemcs-insy
+#SBATCH --account=innovation
 #SBATCH --output=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.out # Set name of output log. %j is the Slurm jobId
 #SBATCH --error=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.err # Set name of error log. %j is the Slurm jobId
 
