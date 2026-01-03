@@ -13,7 +13,8 @@
 paths:
   # Global root directory for all checkpoints (filled by setup script)
   # ckpt_root: "/home/zonghuan/tudelft/projects/sam-body4d/checkpoints"
-  ckpt_root: "/mnt/neon/models/sam4d_checkpoints"
+  # ckpt_root: "/mnt/neon/models/sam4d_checkpoints"
+  ckpt_root: "/mnt/sam4d_checkpoints"
 
 # ---------------------------------------------------------------------------
 # SAM3
