@@ -16,7 +16,7 @@ home_path=/home/zli33
 scratch_path=/scratch/zli33
 
 model_path=$scratch_path/models/sam4d_checkpoints
-data_path=$scratch_path/data/sam4d_body
+data_path=$scratch_path/data/sam4d
 
 bind_model_path=/mnt/sam4d_checkpoints
 bind_data_path=/mnt/data/sam4d_body
