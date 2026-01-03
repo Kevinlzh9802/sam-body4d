@@ -34,8 +34,9 @@ mkdir -p $exp_dir
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 
 apptainer exec --nv \
-  --bind $neon_path:$bind_neon_path \
-  --bind $zli_path:$bind_zli_path \
+  --bind $model_path:$bind_model_path \
+  --bind $data_path:$bind_data_path \
+  --bind $home_path:$bind_home_path \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
