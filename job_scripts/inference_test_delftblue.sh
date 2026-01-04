@@ -29,7 +29,9 @@ output_folder=$bind_data_path/outputs
 
 # Make a unique experiment subfolder to avoid overwriting prior runs
 timestamp=$(date +%Y%m%d_%H%M%S)
-exp_dir=$output_folder/exp_$timestamp
+# Add a short random suffix to avoid collisions when multiple jobs start in the same second
+rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
+exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
 mkdir -p $exp_dir
 
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
