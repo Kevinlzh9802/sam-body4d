@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name="inference_test_delftblue"
 #SBATCH --partition=gpu-a100 # Request partition. Default is 'general' 
-#SBATCH --time=2:00:00      # Request run time (wall-clock). Default is 1 minute
+#SBATCH --time=24:00:00      # Request run time (wall-clock). Default is 1 minute
 #SBATCH --ntasks=1          # Request number of parallel tasks per job. Default is 1
-#SBATCH --cpus-per-task=6    
+#SBATCH --cpus-per-task=12    
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
@@ -43,6 +43,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/cam04_cut_2.mp4 --output $exp_dir
+  python $project_folder/infer_video.py --video $input_folder/cam04_cut_1.mp4 --output $exp_dir
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
