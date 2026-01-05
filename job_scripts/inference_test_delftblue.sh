@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name="inference_test_delftblue"
 #SBATCH --partition=gpu-a100 # Request partition. Default is 'general' 
-#SBATCH --time=24:00:00      # Request run time (wall-clock). Default is 1 minute
+#SBATCH --time=3:00:00      # Request run time (wall-clock). Default is 1 minute
 #SBATCH --ntasks=1          # Request number of parallel tasks per job. Default is 1
 #SBATCH --cpus-per-task=12    
 #SBATCH --mem-per-cpu=8000M
