@@ -7,7 +7,7 @@
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
-#SBATCH --account=innovation
+#SBATCH --account=research-eemcs-insy
 #SBATCH --output=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.out # Set name of output log. %j is the Slurm jobId
 #SBATCH --error=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.err # Set name of error log. %j is the Slurm jobId
 
@@ -43,6 +43,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $exp_dir
+  python $project_folder/infer_video.py --video $input_folder/cam04_cut_1.mp4 --output $exp_dir
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
