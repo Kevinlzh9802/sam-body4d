@@ -43,6 +43,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/cam04_cut_2.mp4 --output $exp_dir
+  python $project_folder/infer_video.py --video $input_folder/cam04_cut_20s.mp4 --output $exp_dir
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
