@@ -18,6 +18,7 @@ from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import pickle
+import json
 # from tools.load_bbox_kp import load_bbox_kp
 
 # Add model paths
@@ -164,7 +165,7 @@ def mask_generation(video_path: str, predictor, inference_state, output_dir, fps
 
 def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps, 
                 pipeline_mask=None, pipeline_rgb=None, depth_model=None,
-                detection_resolution=[256, 512], completion_resolution=[512, 1024]):
+                detection_resolution=[256, 512], completion_resolution=[512, 1024], camera_intrinsics=None):
     """
     Run 4D generation with optional completion.
     """
@@ -367,7 +368,7 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
         
         # Process with SAM-3D-Body
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(
-            estimator, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict
+            estimator, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, camera_intrinsics
         )
         
         num_empth_ids = 0
@@ -410,6 +411,21 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     print(f"[INFO] 4D video saved to: {out_4d_path}")
     
     return out_4d_path
+
+def read_camera_intrinsics(intrinsic_file: str, scale):
+    with open(intrinsic_file, "r") as f:
+        intrinsic_data = json.load(f)
+        K = np.array(intrinsic_data["intrinsic"])
+        dist_coeffs = np.array(intrinsic_data["distortion_coefficients"])
+        # Scale K to match 0.5x resolution images fed to SAM3D
+        K = adjust_K(K, scale=scale)
+    return K, dist_coeffs
+
+def adjust_K(K, scale):
+    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
+             [0,           K[1,1]*scale, K[1,2]*scale],
+             [0,           0,         1]])
+    return K_resized
 
 def load_bbox_kp(bbox_kp_folder: str, folder_name: str):
     """
@@ -523,6 +539,8 @@ Examples:
     
     # if args.boxes is not None:
     print("[INFO] Adding bounding box prompts...")
+
+    
     
     # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
@@ -608,11 +626,15 @@ Examples:
     batch_size = cfg.sam_3d_body.get('batch_size', 1)
     detection_resolution = cfg.completion.get('detection_resolution', [256, 512])
     completion_resolution = cfg.completion.get('completion_resolution', [512, 1024])
+
+    # Read video info
+    cam_num = video_path.split("/")[-1].split(".")[0].split("_")[0][-1]
+    cam_int = read_camera_intrinsics(f"/mnt/data/sam4d_body/inputs/camera_params/intrinsic_{cam_num}.json", scale=0.5)
     
     generate_4d(
         output_dir, estimator, out_obj_ids, batch_size, fps,
         pipeline_mask, pipeline_rgb, depth_model,
-        detection_resolution, completion_resolution
+        detection_resolution, completion_resolution, cam_int
     )
     
     print(f"[INFO] Inference complete! Results saved to: {output_dir}")
