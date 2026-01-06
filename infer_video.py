@@ -39,6 +39,7 @@ from models.diffusion_vas.demo import (
     init_amodal_segmentation_model, init_rgb_model, init_depth_model,
     load_and_transform_masks, load_and_transform_rgbs, rgb_to_depth
 )
+from utils.proj_utils import build_pred_cam_t_debug_record
 
 
 def build_sam3_from_config(cfg):
@@ -165,7 +166,8 @@ def mask_generation(video_path: str, predictor, inference_state, output_dir, fps
 
 def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps, 
                 pipeline_mask=None, pipeline_rgb=None, depth_model=None,
-                detection_resolution=[256, 512], completion_resolution=[512, 1024], camera_intrinsics=None):
+                detection_resolution=[256, 512], completion_resolution=[512, 1024], camera_intrinsics=None,
+                bboxes_kps_data=None, obj_id_offset: int = 1000):
     """
     Run 4D generation with optional completion.
     """
@@ -185,9 +187,19 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     ])
     
     os.makedirs(f"{output_dir}/rendered_frames", exist_ok=True)
+    # Debug: store per-person camera translation (pred_cam_t) to inspect units/axes.
+    debug_cam_t_dir = os.path.join(output_dir, "debug_pred_cam_t")
+    os.makedirs(debug_cam_t_dir, exist_ok=True)
     for obj_id in out_obj_ids:
         os.makedirs(f"{output_dir}/mesh_4d_individual/{obj_id}", exist_ok=True)
         os.makedirs(f"{output_dir}/rendered_frames_individual/{obj_id}", exist_ok=True)
+        os.makedirs(os.path.join(debug_cam_t_dir, str(obj_id)), exist_ok=True)
+
+    # Cache debug file handles for speed (one jsonl per person).
+    debug_fhs = {}
+    for obj_id in out_obj_ids:
+        debug_path = os.path.join(debug_cam_t_dir, str(obj_id), "pred_cam_t.jsonl")
+        debug_fhs[obj_id] = open(debug_path, "w", encoding="utf-8")
     
     n = len(images_list)
     pred_res = detection_resolution
@@ -206,205 +218,244 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     
     mhr_shape_scale_dict = {}
     obj_ratio_dict = {}
-    
-    for i in tqdm(range(0, n, batch_size), desc="Processing batches"):
-        batch_images = images_list[i:i + batch_size]
-        batch_masks = masks_list[i:i + batch_size]
-        
-        W, H = Image.open(batch_masks[0]).size
-        
-        # Detect occlusions
-        idx_dict = {}
-        idx_path = {}
-        occ_dict = {}
-        
-        if len(modal_pixels_list) > 0:
-            pred_amodal_masks_dict = {}
-            for (modal_pixels, obj_id) in zip(modal_pixels_list, out_obj_ids):
-                # Predict amodal masks
-                pred_amodal_masks = pipeline_mask(
-                    modal_pixels[:, i:i + batch_size, :, :, :],
-                    depth_pixels[:, i:i + batch_size, :, :, :],
-                    height=pred_res[0],
-                    width=pred_res[1],
-                    num_frames=modal_pixels[:, i:i + batch_size, :, :, :].shape[1],
-                    decode_chunk_size=8,
-                    motion_bucket_id=127,
-                    fps=8,
-                    noise_aug_strength=0.02,
-                    min_guidance_scale=1.5,
-                    max_guidance_scale=1.5,
-                    generator=generator,
-                ).frames[0]
-                
-                # Process amodal masks
-                pred_amodal_masks_com = [np.array(img.resize((pred_res_hi[1], pred_res_hi[0]))) for img in pred_amodal_masks]
-                pred_amodal_masks_com = np.array(pred_amodal_masks_com).astype('uint8')
-                pred_amodal_masks_com = (pred_amodal_masks_com.sum(axis=-1) > 600).astype('uint8')
-                pred_amodal_masks_com = [keep_largest_component(pamc) for pamc in pred_amodal_masks_com]
-                
-                pred_amodal_masks = [np.array(img.resize((W, H))) for img in pred_amodal_masks]
-                pred_amodal_masks = np.array(pred_amodal_masks).astype('uint8')
-                pred_amodal_masks = (pred_amodal_masks.sum(axis=-1) > 600).astype('uint8')
-                pred_amodal_masks = [keep_largest_component(pamc) for pamc in pred_amodal_masks]
-                
-                # Compute IoU
-                masks = [(np.array(Image.open(bm).convert('P')) == obj_id).astype('uint8') for bm in batch_masks]
-                ious = []
-                masks_margin_shrink = [bm.copy() for bm in masks]
-                mask_H, mask_W = masks_margin_shrink[0].shape
-                
-                for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
-                    zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
-                    zero_mask_cp[masks_margin_shrink[bi] == 1] = 255
-                    mask_binary_cp = zero_mask_cp.astype(np.uint8)
-                    mask_binary_cp[:int(mask_H*0.05), :] = mask_binary_cp[-int(mask_H*0.05):, :] = \
-                        mask_binary_cp[:, :int(mask_W*0.05)] = mask_binary_cp[:, -int(mask_W*0.05):] = 0
-                    
-                    if mask_binary_cp.max() == 0:
-                        ious.append(1.0)
-                        continue
-                    
-                    area_a = (a > 0).sum()
-                    area_b = (b > 0).sum()
-                    if area_a == 0 and area_b == 0:
-                        ious.append(1.0)
-                    elif area_a > area_b:
-                        ious.append(1.0)
-                    else:
-                        inter = np.logical_and(a > 0, b > 0).sum()
-                        uni = np.logical_or(a > 0, b > 0).sum()
-                        obj_iou = inter / (uni + 1e-6)
-                        ious.append(obj_iou)
-                    
-                    if i == 0 and bi == 0:
-                        if ious[0] < 0.7:
-                            obj_ratio_dict[obj_id] = bbox_from_mask(b)
+    try:
+        for i in tqdm(range(0, n, batch_size), desc="Processing batches"):
+            batch_images = images_list[i:i + batch_size]
+            batch_masks = masks_list[i:i + batch_size]
+            if len(batch_masks) == 0:
+                continue
+
+            W, H = Image.open(batch_masks[0]).size
+
+            # Detect occlusions
+            idx_dict = {}
+            idx_path = {}
+            occ_dict = {}
+
+            if len(modal_pixels_list) > 0:
+                pred_amodal_masks_dict = {}
+                for (modal_pixels, obj_id) in zip(modal_pixels_list, out_obj_ids):
+                    # Predict amodal masks
+                    pred_amodal_masks = pipeline_mask(
+                        modal_pixels[:, i:i + batch_size, :, :, :],
+                        depth_pixels[:, i:i + batch_size, :, :, :],
+                        height=pred_res[0],
+                        width=pred_res[1],
+                        num_frames=modal_pixels[:, i:i + batch_size, :, :, :].shape[1],
+                        decode_chunk_size=8,
+                        motion_bucket_id=127,
+                        fps=8,
+                        noise_aug_strength=0.02,
+                        min_guidance_scale=1.5,
+                        max_guidance_scale=1.5,
+                        generator=generator,
+                    ).frames[0]
+
+                    # Process amodal masks
+                    pred_amodal_masks_com = [np.array(img.resize((pred_res_hi[1], pred_res_hi[0]))) for img in pred_amodal_masks]
+                    pred_amodal_masks_com = np.array(pred_amodal_masks_com).astype('uint8')
+                    pred_amodal_masks_com = (pred_amodal_masks_com.sum(axis=-1) > 600).astype('uint8')
+                    pred_amodal_masks_com = [keep_largest_component(pamc) for pamc in pred_amodal_masks_com]
+
+                    pred_amodal_masks = [np.array(img.resize((W, H))) for img in pred_amodal_masks]
+                    pred_amodal_masks = np.array(pred_amodal_masks).astype('uint8')
+                    pred_amodal_masks = (pred_amodal_masks.sum(axis=-1) > 600).astype('uint8')
+                    pred_amodal_masks = [keep_largest_component(pamc) for pamc in pred_amodal_masks]
+
+                    # Compute IoU
+                    masks = [(np.array(Image.open(bm).convert('P')) == obj_id).astype('uint8') for bm in batch_masks]
+                    ious = []
+                    masks_margin_shrink = [bm.copy() for bm in masks]
+                    mask_H, mask_W = masks_margin_shrink[0].shape
+
+                    for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
+                        zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
+                        zero_mask_cp[masks_margin_shrink[bi] == 1] = 255
+                        mask_binary_cp = zero_mask_cp.astype(np.uint8)
+                        mask_binary_cp[:int(mask_H*0.05), :] = mask_binary_cp[-int(mask_H*0.05):, :] = \
+                            mask_binary_cp[:, :int(mask_W*0.05)] = mask_binary_cp[:, -int(mask_W*0.05):] = 0
+
+                        if mask_binary_cp.max() == 0:
+                            ious.append(1.0)
+                            continue
+
+                        area_a = (a > 0).sum()
+                        area_b = (b > 0).sum()
+                        if area_a == 0 and area_b == 0:
+                            ious.append(1.0)
+                        elif area_a > area_b:
+                            ious.append(1.0)
                         else:
-                            obj_ratio_dict[obj_id] = bbox_from_mask(a)
-                
-                # Remove fake completions
-                for pi, pamc in enumerate(pred_amodal_masks_com):
-                    if masks[pi].sum() > pred_amodal_masks[pi].sum():
-                        ious[pi] = 1.0
-                        pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
-                    elif is_super_long_or_wide(pred_amodal_masks[pi], obj_id):
-                        ious[pi] = 1.0
-                        pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
-                    elif is_skinny_mask(pred_amodal_masks[pi]):
-                        ious[pi] = 1.0
-                        pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
-                
-                pred_amodal_masks_dict[obj_id] = pred_amodal_masks_com
-                
-                # Confirm occlusions
-                start, end = (idxs := [ix for ix, x in enumerate(ious) if x < 0.7]) and (idxs[0], idxs[-1]) or (None, None)
-                occ_dict[obj_id] = [1 if ix > 0.7 else 0 for ix in ious]
-                
-                if start is not None and end is not None:
-                    start = max(0, start - 2)
-                    end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1] - 1, end + 2)
-                    idx_dict[obj_id] = (start, end)
-                    completion_path = ''.join(random.choices('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=4))
-                    completion_image_path = f'{output_dir}/completion/{completion_path}/images'
-                    completion_masks_path = f'{output_dir}/completion/{completion_path}/masks'
-                    os.makedirs(completion_image_path, exist_ok=True)
-                    os.makedirs(completion_masks_path, exist_ok=True)
-                    idx_path[obj_id] = {'images': completion_image_path, 'masks': completion_masks_path}
-                    
-                    for idx_ in range(start, end):
-                        mask_idx_ = pred_amodal_masks[idx_].copy()
-                        mask_idx_[mask_idx_ > 0] = obj_id
-                        mask_idx_ = Image.fromarray(mask_idx_).convert('P')
-                        mask_idx_.putpalette(DAVIS_PALETTE)
-                        mask_idx_.save(os.path.join(completion_masks_path, f"{idx_:08d}.png"))
-            
-            # Content completion
-            for obj_id, (start, end) in idx_dict.items():
-                completion_image_path = idx_path[obj_id]['images']
-                modal_pixels_current, ori_shape = load_and_transform_masks(MASKS_PATH, resolution=pred_res_hi, obj_id=obj_id)
-                rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(IMAGE_PATH, resolution=pred_res_hi)
-                modal_pixels_current = modal_pixels_current[:, i:i + batch_size, :, :, :]
-                modal_pixels_current = modal_pixels_current[:, start:end]
-                pred_amodal_masks_current = pred_amodal_masks_dict[obj_id][start:end]
-                modal_mask_union = (modal_pixels_current[0, :, 0, :, :].cpu().float().numpy() > 0).astype('uint8')
-                pred_amodal_masks_current = np.logical_or(pred_amodal_masks_current, modal_mask_union).astype('uint8')
-                pred_amodal_masks_tensor = torch.from_numpy(np.where(pred_amodal_masks_current == 0, -1, 1)).float().unsqueeze(0).unsqueeze(2).repeat(1, 1, 3, 1, 1)
-                
-                rgb_pixels_current = rgb_pixels_current[:, i:i + batch_size, :, :, :][:, start:end]
-                modal_obj_mask = (modal_pixels_current > 0).float()
-                modal_background = 1 - modal_obj_mask
-                rgb_pixels_current = (rgb_pixels_current + 1) / 2
-                modal_rgb_pixels = rgb_pixels_current * modal_obj_mask + modal_background
-                modal_rgb_pixels = modal_rgb_pixels * 2 - 1
-                
-                # Predict amodal RGB
-                pred_amodal_rgb = pipeline_rgb(
-                    modal_rgb_pixels,
-                    pred_amodal_masks_tensor,
-                    height=pred_res_hi[0],
-                    width=pred_res_hi[1],
-                    num_frames=end - start,
-                    decode_chunk_size=8,
-                    motion_bucket_id=127,
-                    fps=8,
-                    noise_aug_strength=0.02,
-                    min_guidance_scale=1.5,
-                    max_guidance_scale=1.5,
-                    generator=generator,
-                ).frames[0]
-                
-                pred_amodal_rgb = [np.array(img) for img in pred_amodal_rgb]
-                pred_amodal_rgb = np.array(pred_amodal_rgb).astype('uint8')
-                pred_amodal_rgb_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
-                                                for frame in pred_amodal_rgb])
-                idx_ = start
-                for img in pred_amodal_rgb_save:
-                    cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                    idx_ += 1
-        else:
-            for obj_id in out_obj_ids:
-                occ_dict[obj_id] = [1] * len(batch_masks)
-        
-        # Process with SAM-3D-Body
-        mask_outputs, id_batch, empty_frame_list = process_image_with_mask(
-            estimator, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, camera_intrinsics
-        )
-        
-        num_empth_ids = 0
-        for frame_id in range(len(batch_images)):
-            image_path = batch_images[frame_id]
-            if frame_id in empty_frame_list:
-                mask_output = None
-                id_current = None
-                num_empth_ids += 1
+                            inter = np.logical_and(a > 0, b > 0).sum()
+                            uni = np.logical_or(a > 0, b > 0).sum()
+                            obj_iou = inter / (uni + 1e-6)
+                            ious.append(obj_iou)
+
+                        if i == 0 and bi == 0:
+                            if ious[0] < 0.7:
+                                obj_ratio_dict[obj_id] = bbox_from_mask(b)
+                            else:
+                                obj_ratio_dict[obj_id] = bbox_from_mask(a)
+
+                    # Remove fake completions
+                    for pi, pamc in enumerate(pred_amodal_masks_com):
+                        if masks[pi].sum() > pred_amodal_masks[pi].sum():
+                            ious[pi] = 1.0
+                            pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
+                        elif is_super_long_or_wide(pred_amodal_masks[pi], obj_id):
+                            ious[pi] = 1.0
+                            pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
+                        elif is_skinny_mask(pred_amodal_masks[pi]):
+                            ious[pi] = 1.0
+                            pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
+
+                    pred_amodal_masks_dict[obj_id] = pred_amodal_masks_com
+
+                    # Confirm occlusions
+                    start, end = (idxs := [ix for ix, x in enumerate(ious) if x < 0.7]) and (idxs[0], idxs[-1]) or (None, None)
+                    occ_dict[obj_id] = [1 if ix > 0.7 else 0 for ix in ious]
+
+                    if start is not None and end is not None:
+                        start = max(0, start - 2)
+                        end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1] - 1, end + 2)
+                        idx_dict[obj_id] = (start, end)
+                        completion_path = ''.join(random.choices('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=4))
+                        completion_image_path = f'{output_dir}/completion/{completion_path}/images'
+                        completion_masks_path = f'{output_dir}/completion/{completion_path}/masks'
+                        os.makedirs(completion_image_path, exist_ok=True)
+                        os.makedirs(completion_masks_path, exist_ok=True)
+                        idx_path[obj_id] = {'images': completion_image_path, 'masks': completion_masks_path}
+
+                        for idx_ in range(start, end):
+                            mask_idx_ = pred_amodal_masks[idx_].copy()
+                            mask_idx_[mask_idx_ > 0] = obj_id
+                            mask_idx_ = Image.fromarray(mask_idx_).convert('P')
+                            mask_idx_.putpalette(DAVIS_PALETTE)
+                            mask_idx_.save(os.path.join(completion_masks_path, f"{idx_:08d}.png"))
+
+                # Content completion
+                for obj_id, (start, end) in idx_dict.items():
+                    completion_image_path = idx_path[obj_id]['images']
+                    modal_pixels_current, ori_shape = load_and_transform_masks(MASKS_PATH, resolution=pred_res_hi, obj_id=obj_id)
+                    rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(IMAGE_PATH, resolution=pred_res_hi)
+                    modal_pixels_current = modal_pixels_current[:, i:i + batch_size, :, :, :]
+                    modal_pixels_current = modal_pixels_current[:, start:end]
+                    pred_amodal_masks_current = pred_amodal_masks_dict[obj_id][start:end]
+                    modal_mask_union = (modal_pixels_current[0, :, 0, :, :].cpu().float().numpy() > 0).astype('uint8')
+                    pred_amodal_masks_current = np.logical_or(pred_amodal_masks_current, modal_mask_union).astype('uint8')
+                    pred_amodal_masks_tensor = torch.from_numpy(np.where(pred_amodal_masks_current == 0, -1, 1)).float().unsqueeze(0).unsqueeze(2).repeat(1, 1, 3, 1, 1)
+
+                    rgb_pixels_current = rgb_pixels_current[:, i:i + batch_size, :, :, :][:, start:end]
+                    modal_obj_mask = (modal_pixels_current > 0).float()
+                    modal_background = 1 - modal_obj_mask
+                    rgb_pixels_current = (rgb_pixels_current + 1) / 2
+                    modal_rgb_pixels = rgb_pixels_current * modal_obj_mask + modal_background
+                    modal_rgb_pixels = modal_rgb_pixels * 2 - 1
+
+                    # Predict amodal RGB
+                    pred_amodal_rgb = pipeline_rgb(
+                        modal_rgb_pixels,
+                        pred_amodal_masks_tensor,
+                        height=pred_res_hi[0],
+                        width=pred_res_hi[1],
+                        num_frames=end - start,
+                        decode_chunk_size=8,
+                        motion_bucket_id=127,
+                        fps=8,
+                        noise_aug_strength=0.02,
+                        min_guidance_scale=1.5,
+                        max_guidance_scale=1.5,
+                        generator=generator,
+                    ).frames[0]
+
+                    pred_amodal_rgb = [np.array(img) for img in pred_amodal_rgb]
+                    pred_amodal_rgb = np.array(pred_amodal_rgb).astype('uint8')
+                    pred_amodal_rgb_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
+                                                    for frame in pred_amodal_rgb])
+                    idx_ = start
+                    for img in pred_amodal_rgb_save:
+                        cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                        idx_ += 1
             else:
-                mask_output = mask_outputs[frame_id - num_empth_ids]
-                id_current = id_batch[frame_id - num_empth_ids]
-            
-            img = cv2.imread(image_path)
-            rend_img = visualize_sample_together(img, mask_output, estimator.faces, id_current)
-            cv2.imwrite(
-                f"{output_dir}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                rend_img.astype(np.uint8),
+                for obj_id in out_obj_ids:
+                    occ_dict[obj_id] = [1] * len(batch_masks)
+
+            # Process with SAM-3D-Body
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(
+                estimator, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, camera_intrinsics
             )
-            
-            # Save rendered frames for individual person
-            rend_img_list = visualize_sample(img, mask_output, estimator.faces, id_current)
-            for ri, rend_img in enumerate(rend_img_list):
+
+            num_empth_ids = 0
+            for frame_id in range(len(batch_images)):
+                image_path = batch_images[frame_id]
+                if frame_id in empty_frame_list:
+                    mask_output = None
+                    id_current = None
+                    num_empth_ids += 1
+                else:
+                    mask_output = mask_outputs[frame_id - num_empth_ids]
+                    id_current = id_batch[frame_id - num_empth_ids]
+
+                img = cv2.imread(image_path)
+                rend_img = visualize_sample_together(img, mask_output, estimator.faces, id_current)
                 cv2.imwrite(
-                    f"{output_dir}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                    f"{output_dir}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
                     rend_img.astype(np.uint8),
                 )
-            
-            # Save mesh for individual person
-            save_mesh_results(
-                outputs=mask_output,
-                faces=estimator.faces,
-                save_dir=f"{output_dir}/mesh_4d_individual",
-                image_path=image_path,
-                id_current=id_current,
-            )
+
+                # Save rendered frames for individual person (by tracked obj_id if available)
+                rend_img_list = visualize_sample(img, mask_output, estimator.faces, id_current)
+                for ri, rend_img in enumerate(rend_img_list):
+                    if id_current is not None and ri < len(id_current):
+                        obj_id = int(id_current[ri])
+                    else:
+                        obj_id = int(ri + 1)
+                    cv2.imwrite(
+                        f"{output_dir}/rendered_frames_individual/{obj_id}/{os.path.basename(image_path)[:-4]}_{obj_id}.jpg",
+                        rend_img.astype(np.uint8),
+                    )
+
+                # Debug dump pred_cam_t (and pelvis proxy) per person for this frame.
+                # One json record per line in debug_pred_cam_t/<obj_id>/pred_cam_t.jsonl
+                frame_name = os.path.basename(image_path)[:-4]
+                if mask_output is not None:
+                    for pid, person_output in enumerate(mask_output):
+                        if id_current is not None and pid < len(id_current):
+                            obj_id = int(id_current[pid])
+                        else:
+                            obj_id = int(pid + 1)
+                        if obj_id not in debug_fhs:
+                            continue
+
+                        pelvis_local = None
+                        pelvis_cam = None
+                        try:
+                            rec = build_pred_cam_t_debug_record(
+                                frame_name=frame_name,
+                                obj_id=obj_id,
+                                person_output=person_output,
+                                bboxes_kps_data=bboxes_kps_data,
+                                obj_id_offset=obj_id_offset,
+                            )
+                        except Exception:
+                            rec = {"frame": frame_name, "obj_id": int(obj_id)}
+
+                        debug_fhs[obj_id].write(json.dumps(rec) + "\n")
+
+                # Save mesh for individual person
+                save_mesh_results(
+                    outputs=mask_output,
+                    faces=estimator.faces,
+                    save_dir=f"{output_dir}/mesh_4d_individual",
+                    image_path=image_path,
+                    id_current=id_current,
+                )
+    finally:
+        for _k, fh in debug_fhs.items():
+            try:
+                fh.close()
+            except Exception:
+                pass
     
     out_4d_path = os.path.join(output_dir, "4d_result.mp4")
     jpg_folder_to_mp4(f"{output_dir}/rendered_frames", out_4d_path, fps=fps)
@@ -464,12 +515,6 @@ Examples:
                         help="Points for tracking (format: 'obj_id,frame_idx,x,y,label' where label: 1=positive, 0=negative)")
     parser.add_argument("--no-completion", action="store_true", help="Disable completion module")
     args = parser.parse_args()
-    
-    # Validate that at least one initialization method is provided
-    # if args.boxes is None and args.points is None:
-    #     parser.error("You must provide either --boxes or --points to initialize tracking.\n"
-    #                 "SAM-3 needs to know what objects to track in the video.\n"
-    #                 "Use --help for examples.")
     
     # Setup device
     if torch.cuda.is_available():
@@ -544,21 +589,13 @@ Examples:
     
     # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
+    # Don't use 0 for object id as it is reserved for background in mask PNGs.
+    # Use stable non-zero IDs (e.g. 1000+) for tracking, but keep bbox indexing 0..N-1.
     selected_boxes = list(range(len(bboxes_kps_data[0]['bboxes'])))
-    for obj_id in selected_boxes:
-        bbox = bboxes_kps_data[0]['bboxes'][obj_id]
+    for bbox_idx in selected_boxes:
+        obj_id = 1000 + bbox_idx
+        bbox = bboxes_kps_data[0]['bboxes'][bbox_idx]
         rel_box = bbox / [width, height, width, height]
-    # for box_str in args.boxes:
-    #     parts = box_str.split(',')
-    #     if len(parts) != 6:
-    #         raise ValueError(f"Invalid box format: {box_str}. Expected: obj_id,frame_idx,x_min,y_min,x_max,y_max")
-        
-    #     obj_id = int(parts[0])
-    #     frame_idx = int(parts[1])
-    #     x_min, y_min, x_max, y_max = map(float, parts[2:6])
-        
-    #     # Convert to relative coordinates
-    #     rel_box = np.array([[x_min / width, y_min / height, x_max / width, y_max / height]], dtype=np.float32)
         
         print(f"  Object {obj_id} at frame {0}: box relative coordinates {rel_box}")
         
@@ -568,17 +605,6 @@ Examples:
             obj_id=obj_id,
             box=rel_box,
         )
-    # else:
-    #     print("[INFO] Adding testing box prompts...")
-    #     box = np.array([[499.70489502, 146.70619202, 624.59869385, 247.97242737]], dtype=np.float32)
-    #     rel_box = [[x / width, y / height, x / width, y / height] for x, y in box]
-    #     rel_box = np.array(rel_box, dtype=np.float32)
-    #     _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points_or_box(
-    #         inference_state=inference_state,
-    #         frame_idx=0,
-    #         obj_id=1,
-    #         box=rel_box,
-    #     )
         
     if args.points is not None:
         print("[INFO] Adding point prompts...")
@@ -634,7 +660,9 @@ Examples:
     generate_4d(
         output_dir, estimator, out_obj_ids, batch_size, fps,
         pipeline_mask, pipeline_rgb, depth_model,
-        detection_resolution, completion_resolution, cam_int
+        detection_resolution, completion_resolution, cam_int,
+        bboxes_kps_data=bboxes_kps_data,
+        obj_id_offset=1000,
     )
     
     print(f"[INFO] Inference complete! Results saved to: {output_dir}")

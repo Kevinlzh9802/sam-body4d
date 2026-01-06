@@ -2,6 +2,36 @@ import numpy as np
 import torch
 
 
+def _build_objid_to_slot(frame_obj_ids, num_humans: int):
+    """
+    Build a stable mapping from arbitrary obj_id values (e.g. 1000+) to the
+    0-based 'slot' index used by the flattened tensors shaped (T*N, D).
+
+    Assumption (matches this repo's batching): within each frame t, the i-th person
+    corresponds to slot i in the flattened layout, and frame_obj_ids[t][i] is the
+    obj_id for that slot. This mapping should remain consistent across frames.
+    """
+    objid_to_slot = {}
+    inconsistent = set()
+    if frame_obj_ids is None:
+        return objid_to_slot
+
+    for ids in frame_obj_ids:
+        if ids is None:
+            continue
+        # ids may be any iterable of ints
+        for slot, obj_id in enumerate(list(ids)[: max(int(num_humans), 0)]):
+            if obj_id in inconsistent:
+                continue
+            if obj_id not in objid_to_slot:
+                objid_to_slot[obj_id] = slot
+            elif objid_to_slot[obj_id] != slot:
+                inconsistent.add(obj_id)
+                objid_to_slot.pop(obj_id, None)
+
+    return objid_to_slot
+
+
 def ema_smooth_global_rot_per_obj_id_adaptive(
     mhr_dict,
     num_frames,
@@ -17,11 +47,11 @@ def ema_smooth_global_rot_per_obj_id_adaptive(
     """
     Segment-wise, occlusion-aware smoothing for global_rot, per obj_id.
 
-    vis_flags: dict[int -> List[int]], obj_id starts from 1.
+    vis_flags: dict[int -> List[int]] keyed by the tracked obj_id.
         vis_flags[obj_id][t] = 1 -> this obj_id is visible (non-occluded) at frame t
         vis_flags[obj_id][t] = 0 -> this obj_id is occluded / unreliable at frame t
 
-    For each obj_id (1..num_humans), with slot = obj_id - 1:
+    For each tracked obj_id, with a stable 'slot' index inferred from frame_obj_ids:
       - present_mask[t] = (obj_id in frame_obj_ids[t])
       - visible_mask[t] = present_mask[t] AND vis_flags[obj_id][t] == 1
       - occ_mask[t]     = present_mask[t] AND vis_flags[obj_id][t] == 0
@@ -60,14 +90,17 @@ def ema_smooth_global_rot_per_obj_id_adaptive(
     rot_np = rot.detach().cpu().float().numpy()  # (B, 3)
     frames_all = np.arange(num_frames, dtype=int)
 
+    objid_to_slot = _build_objid_to_slot(frame_obj_ids, num_humans)
+    if not objid_to_slot:
+        return mhr_dict
+
     # global thresholds for "always moving" humans
     motion_med_th_large = motion_med_th * 3.0
     motion_max_th_large = motion_max_th * 3.0
 
     support_k = 5  # number of nearest visible frames for local averaging
 
-    for obj_id in range(1, num_humans + 1):
-        slot = obj_id - 1  # 0-based slot index
+    for obj_id, slot in sorted(objid_to_slot.items(), key=lambda kv: kv[1]):
 
         # frames where this obj_id actually appears
         present_mask = np.array(
@@ -394,6 +427,10 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
 
     frames_all = np.arange(num_frames, dtype=int)
 
+    objid_to_slot = _build_objid_to_slot(frame_obj_ids, num_humans)
+    if not objid_to_slot:
+        return mhr_dict
+
     # thresholds for "always moving" humans (global gating)
     motion_med_th_large = motion_med_th * 3.0
     motion_max_th_large = motion_max_th * 3.0
@@ -423,8 +460,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
 
         param_np = param.detach().cpu().float().numpy()  # (B, D)
 
-        for obj_id in range(1, num_humans + 1):
-            slot = obj_id - 1  # 0-based index within each frame
+        for obj_id, slot in sorted(objid_to_slot.items(), key=lambda kv: kv[1]):
 
             # frames where this obj_id actually appears
             present_mask = np.array(

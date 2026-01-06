@@ -2141,7 +2141,9 @@ class SAM3DBody(BaseModel):
                 mhr_dict=pose_output["mhr"],
                 num_frames=len(img_list),
                 frame_obj_ids=id_batch,
-                keys_to_smooth=["body_pose", "hand"],
+                # Also smooth camera translation, since exported meshes are vertices + pred_cam_t.
+                # This greatly reduces world/camera-space jitter that affects interpersonal distances.
+                keys_to_smooth=["body_pose", "hand", "pred_cam_t"],
                 kalman_cfg=None,
                 vis_flags=occ_dict
             )

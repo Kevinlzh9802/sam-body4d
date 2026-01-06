@@ -146,8 +146,74 @@ def _sync_sequences(
         return out
     raise ValueError(f"Unknown sync mode: {mode}")
 
+def _center_vertices_sequence(
+    verts: np.ndarray,
+    center_mode: str = "mean",
+    center_vertex: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Center a (T, V, 3) vertex sequence by subtracting a per-frame center.
+    - If center_vertex is provided, uses that vertex as the center (per frame).
+    - Otherwise uses per-frame mean/median over vertices.
+    """
+    if verts.ndim != 3 or verts.shape[-1] != 3:
+        raise ValueError(f"Expected verts shape (T,V,3), got {verts.shape}")
 
-def main() -> None:
+    if center_vertex is not None:
+        if not (0 <= center_vertex < verts.shape[1]):
+            raise ValueError(f"center_vertex out of range: {center_vertex} for V={verts.shape[1]}")
+        center = verts[:, center_vertex, :]  # (T, 3)
+    else:
+        if center_mode == "mean":
+            center = verts.mean(axis=1)  # (T, 3)
+        elif center_mode == "median":
+            center = np.median(verts, axis=1)  # (T, 3)
+        else:
+            raise ValueError(f"Unknown center_mode: {center_mode} (use 'mean' or 'median')")
+
+    return verts - center[:, None, :]
+
+
+def view_single_person_centered(
+    mesh_dir: str,
+    person_id: str,
+    stride: int = 1,
+    max_frames: Optional[int] = None,
+    center_mode: str = "mean",
+    center_vertex: Optional[int] = None,
+    show_floor: bool = True,
+) -> None:
+    """
+    View ONE person's mesh sequence, centered per-frame so the chosen center is at the origin.
+    """
+    person_dir = os.path.join(mesh_dir, str(person_id))
+    if not os.path.isdir(person_dir):
+        raise FileNotFoundError(f"Person folder not found: {person_dir}")
+
+    verts, faces, used = _load_sequence_for_person(
+        person_dir, stride=max(1, stride), max_frames=max_frames
+    )
+    verts = _center_vertices_sequence(verts, center_mode=center_mode, center_vertex=center_vertex)
+
+    from aitviewer.renderables.meshes import Meshes  # type: ignore
+    from aitviewer.viewer import Viewer  # type: ignore
+
+    v = Viewer()
+    mesh = Meshes(vertices=np.asarray(verts, dtype=np.float32), faces=np.asarray(faces, dtype=np.int32),
+                  name=f"Person_{person_id}_centered")
+    v.scene.add(mesh)
+
+    if show_floor:
+        v.scene.floor.plane = "xy"
+        v.scene.floor.side_length = 20
+
+    if used:
+        print(f"[OK] Centered ID {person_id}: {verts.shape[0]} frames; first={used[0]} last={used[-1]}")
+    print("Controls: SPACE play/pause, left/right arrows step frames.")
+    v.run()
+
+
+def meshes_4d() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mesh_dir", required=True, help="Path to mesh_4d_individual directory")
     parser.add_argument(
@@ -231,7 +297,67 @@ def main() -> None:
     v.run()
 
 
+def meshes_4d_single_person() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mesh_dir", required=True, help="Path to mesh_4d_individual directory")
+    parser.add_argument(
+        "--ids",
+        nargs="*",
+        default=None,
+        help="Optional list of person/object IDs (folder names). If omitted, loads all.",
+    )
+
+    # >>> add these args <<<
+    parser.add_argument(
+        "--single_id",
+        default=None,
+        help="If set, view only this person, centered at origin (overrides --ids).",
+    )
+    parser.add_argument(
+        "--center_mode",
+        choices=["mean", "median"],
+        default="mean",
+        help="How to compute per-frame center if --center_vertex is not set (default: mean).",
+    )
+    parser.add_argument(
+        "--center_vertex",
+        type=int,
+        default=None,
+        help="Optional vertex index to use as center (overrides --center_mode).",
+    )
+    parser.add_argument("--no_floor", action="store_true", help="Disable floor in centered single-person view.")
+    # <<< end add args <<<
+
+    parser.add_argument("--stride", type=int, default=1, help="Frame stride (default: 1)")
+    parser.add_argument("--max_frames", type=int, default=None, help="Max frames per person")
+    parser.add_argument(
+        "--sync",
+        choices=["truncate", "pad", "none"],
+        default="truncate",
+        help="How to sync different sequence lengths for viewing (default: truncate)",
+    )
+    args = parser.parse_args()
+
+    mesh_dir = args.mesh_dir
+    if not os.path.isdir(mesh_dir):
+        raise FileNotFoundError(f"--mesh_dir is not a directory: {mesh_dir}")
+
+    # >>> add this early-exit branch <<<
+    if args.single_id is not None:
+        view_single_person_centered(
+            mesh_dir=mesh_dir,
+            person_id=str(args.single_id),
+            stride=args.stride,
+            max_frames=args.max_frames,
+            center_mode=args.center_mode,
+            center_vertex=args.center_vertex,
+            show_floor=(not args.no_floor),
+        )
+        return
+
+
 if __name__ == "__main__":
-    main()
+    # meshes_4d()
+    meshes_4d_single_person()
 
 
