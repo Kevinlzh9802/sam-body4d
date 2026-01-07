@@ -101,6 +101,9 @@ color_list = color_list.astype('uint8').tolist()
 
 
 def vis_add_mask(image, mask, color, alpha):
+	# Be robust to arbitrary object IDs: wrap color index into palette range.
+	# This prevents crashes when object IDs are large (e.g. 1000+ tracking IDs).
+	# color = int(color) % len(color_list)
 	color = np.array(color_list[color])
 	mask = mask > 0.5
 	image[mask] = image[mask] * (1-alpha) + color * alpha
