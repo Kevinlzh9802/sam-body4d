@@ -167,7 +167,7 @@ def mask_generation(video_path: str, predictor, inference_state, output_dir, fps
 def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps, 
                 pipeline_mask=None, pipeline_rgb=None, depth_model=None,
                 detection_resolution=[256, 512], completion_resolution=[512, 1024], camera_intrinsics=None,
-                bboxes_kps_data=None, obj_id_offset: int = 1000):
+                bboxes_kps_data=None, obj_id_to_bbox_idx=None):
     """
     Run 4D generation with optional completion.
     """
@@ -435,7 +435,7 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
                                 obj_id=obj_id,
                                 person_output=person_output,
                                 bboxes_kps_data=bboxes_kps_data,
-                                obj_id_offset=obj_id_offset,
+                                obj_id_to_bbox_idx=obj_id_to_bbox_idx,
                             )
                         except Exception:
                             rec = {"frame": frame_name, "obj_id": int(obj_id)}
@@ -584,16 +584,17 @@ Examples:
     
     # if args.boxes is not None:
     print("[INFO] Adding bounding box prompts...")
-
-    
     
     # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     # Don't use 0 for object id as it is reserved for background in mask PNGs.
     # Use stable non-zero IDs (e.g. 1000+) for tracking, but keep bbox indexing 0..N-1.
     selected_boxes = list(range(len(bboxes_kps_data[0]['bboxes'])))
+    pid_list = bboxes_kps_data[0]['pids']
+    # Explicit mapping for debug/projection utilities (supports discontinuous obj_id values).
+    obj_id_to_bbox_idx = {int(pid): int(i) for i, pid in enumerate(pid_list)}
     for bbox_idx in selected_boxes:
-        obj_id = 1000 + bbox_idx
+        obj_id = pid_list[bbox_idx]
         bbox = bboxes_kps_data[0]['bboxes'][bbox_idx]
         rel_box = bbox / [width, height, width, height]
         
@@ -662,7 +663,7 @@ Examples:
         pipeline_mask, pipeline_rgb, depth_model,
         detection_resolution, completion_resolution, cam_int,
         bboxes_kps_data=bboxes_kps_data,
-        obj_id_offset=1000,
+        obj_id_to_bbox_idx=obj_id_to_bbox_idx,
     )
     
     print(f"[INFO] Inference complete! Results saved to: {output_dir}")

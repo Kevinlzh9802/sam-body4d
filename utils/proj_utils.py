@@ -112,7 +112,7 @@ def compute_reproj_2d_alignment_debug(
     frame_idx: int,
     obj_id: int,
     pred_keypoints_2d: Any,
-    obj_id_offset: int = 1000,
+    obj_id_to_bbox_idx: Optional[Dict[int, int]] = None,
     obs_scale_candidates: Sequence[float] = (1.0, 0.5, 2.0),
 ) -> Optional[Dict[str, Any]]:
     """
@@ -157,7 +157,13 @@ def compute_reproj_2d_alignment_debug(
     if kps_all.ndim != 3 or kps_all.shape[-1] < 3:
         return None
 
-    bbox_idx = int(obj_id) - int(obj_id_offset)
+    # Map obj_id -> bbox_idx.
+    # Prefer an explicit mapping (works for discontinuous IDs like [1,2,4,5,8,15]).
+    # Fallback to legacy behavior: if no mapping is provided, treat obj_id as 1-based index.
+    if obj_id_to_bbox_idx is not None:
+        bbox_idx = int(obj_id_to_bbox_idx.get(int(obj_id), -1))
+    else:
+        bbox_idx = int(obj_id) - 1
     if bbox_idx < 0 or bbox_idx >= kps_all.shape[0]:
         return None
 
@@ -210,7 +216,7 @@ def build_pred_cam_t_debug_record(
     obj_id: int,
     person_output: Dict[str, Any],
     bboxes_kps_data: Any = None,
-    obj_id_offset: int = 1000,
+    obj_id_to_bbox_idx: Optional[Dict[int, int]] = None,
 ) -> Dict[str, Any]:
     """
     Build a JSON-serializable debug record for pred_cam_t and optional 2D alignment metrics.
@@ -243,7 +249,7 @@ def build_pred_cam_t_debug_record(
         frame_idx=frame_idx,
         obj_id=int(obj_id),
         pred_keypoints_2d=k2d,
-        obj_id_offset=obj_id_offset,
+        obj_id_to_bbox_idx=obj_id_to_bbox_idx,
     )
     if reproj_dbg is not None:
         rec["reproj_2d_err"] = reproj_dbg
