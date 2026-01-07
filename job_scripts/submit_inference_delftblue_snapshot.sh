@@ -41,7 +41,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 timestamp=$(date +%Y%m%d_%H%M%S)
-rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
+# NOTE: avoid `tr ... | head -c 4` under `set -o pipefail` (can exit with SIGPIPE=141).
+rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+)
 exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
 
 mkdir -p "$exp_dir/code"
