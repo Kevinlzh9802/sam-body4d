@@ -23,16 +23,30 @@ bind_data_path=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
-project_folder=$bind_home_path/projects/sam-body4d
 input_folder=$bind_data_path/inputs
 output_folder=$bind_data_path/outputs
 
-# Make a unique experiment subfolder to avoid overwriting prior runs
-timestamp=$(date +%Y%m%d_%H%M%S)
-# Add a short random suffix to avoid collisions when multiple jobs start in the same second
-rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
-exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
-mkdir -p $exp_dir
+# Option 2: run from a snapshot created at SUBMISSION time.
+# The submit helper script should pass EXP_DIR=/mnt/data/sam4d_body/outputs/exp_... via sbatch --export.
+if [ -z "${EXP_DIR:-}" ]; then
+  echo "[WARN] EXP_DIR not set; falling back to creating a fresh exp_dir at job start."
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
+  exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
+  mkdir -p "$exp_dir"
+else
+  exp_dir="$EXP_DIR"
+  mkdir -p "$exp_dir"
+fi
+
+# Prefer running from the snapshot if it exists.
+if [ -d "$exp_dir/code" ]; then
+  exp_name=$(basename "$exp_dir")
+  project_folder=$bind_data_path/outputs/$exp_name/code
+else
+  echo "[WARN] No code snapshot found at $exp_dir/code; running from live repo in home."
+  project_folder=$bind_home_path/projects/sam-body4d
+fi
 
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 
@@ -43,6 +57,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/cam04_cut_10s.mp4 --output $exp_dir
+  python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $exp_dir
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
