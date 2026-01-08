@@ -23,14 +23,26 @@ output_folder=$data_path/outputs
 input_folder=$data_path/inputs
 
 repo_dir=$home_path/projects/sam-body4d
-job_script=$repo_dir/job_scripts/inference_test_delftblue.sh
+job_script_e2e=$repo_dir/job_scripts/inference_test_delftblue.sh
+job_script_masklets=$repo_dir/job_scripts/masklets_test_delftblue.sh
+job_script_meshes=$repo_dir/job_scripts/meshes_test_delftblue.sh
 
 video_rel="cam04_cut_10s.mp4"
+mode="e2e" # e2e | masklets | meshes
+exp_dir_override=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --mode)
+      mode="$2"
+      shift 2
+      ;;
     --video)
       video_rel="$2"
+      shift 2
+      ;;
+    --exp-dir)
+      exp_dir_override="$2"
       shift 2
       ;;
     *)
@@ -40,32 +52,59 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-timestamp=$(date +%Y%m%d_%H%M%S)
-# NOTE: avoid `tr ... | head -c 4` under `set -o pipefail` (can exit with SIGPIPE=141).
-rand_suffix=$(python3 - <<'PY'
+if [ -n "${exp_dir_override:-}" ]; then
+  exp_dir="$exp_dir_override"
+  echo "[INFO] Using existing EXP_DIR: $exp_dir"
+  if [ ! -d "$exp_dir" ]; then
+    echo "[ERROR] --exp-dir does not exist: $exp_dir" >&2
+    exit 2
+  fi
+else
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  # NOTE: avoid `tr ... | head -c 4` under `set -o pipefail` (can exit with SIGPIPE=141).
+  rand_suffix=$(python3 - <<'PY'
 import random, string
 print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
 PY
-)
-exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
+  )
+  exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
 
-mkdir -p "$exp_dir/code"
-echo "[INFO] Creating snapshot in: $exp_dir/code"
+  mkdir -p "$exp_dir/code"
+  echo "[INFO] Creating snapshot in: $exp_dir/code"
 
-rsync -a --delete \
-  --exclude ".git" \
-  --exclude "__pycache__" \
-  --exclude "*.pyc" \
-  --exclude "outputs" \
-  "$repo_dir/" \
-  "$exp_dir/code/"
+  rsync -a --delete \
+    --exclude ".git" \
+    --exclude "__pycache__" \
+    --exclude "*.pyc" \
+    --exclude "outputs" \
+    "$repo_dir/" \
+    "$exp_dir/code/"
+fi
 
 echo "[INFO] Submitting job with EXP_DIR=$exp_dir"
 echo "[INFO] Video: $input_folder/$video_rel"
 
 # Pass EXP_DIR so the compute job uses the snapshot.
-# Also pass VIDEO so you can change it without editing the job script.
-sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel "$job_script"
+# Also pass VIDEO_REL so you can change it without editing job scripts.
+#
+case "$mode" in
+  e2e)
+    # E2E pipeline (infer_video.py). Writes under EXP_DIR/e2e to avoid clobbering other jobs.
+    sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel,OUTPUT_SUBDIR=e2e "$job_script_e2e"
+    ;;
+  masklets)
+    # Stage 1 only (SAM-3 -> masks). Writes under EXP_DIR/masklets by default.
+    sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel "$job_script_masklets"
+    ;;
+  meshes)
+    # Stage 2 only (SAM 3D Body from saved masks). Reads EXP_DIR/masklets by default.
+    sbatch --export=ALL,EXP_DIR=$exp_dir "$job_script_meshes"
+    ;;
+  *)
+    echo "[ERROR] Unknown --mode: $mode (expected: e2e|masklets|meshes)" >&2
+    exit 2
+    ;;
+esac
 
 echo "[OK] Submitted. Snapshot frozen at submit time."
 echo "     EXP_DIR=$exp_dir"

@@ -39,6 +39,14 @@ else
   mkdir -p "$exp_dir"
 fi
 
+# If you want to run multiple jobs under the same EXP_DIR (e.g., e2e + masklets + meshes),
+# set OUTPUT_SUBDIR (e.g., "e2e") to avoid clobbering images/masks in the root.
+run_output_dir="$exp_dir"
+if [ -n "${OUTPUT_SUBDIR:-}" ]; then
+  run_output_dir="$exp_dir/$OUTPUT_SUBDIR"
+  mkdir -p "$run_output_dir"
+fi
+
 # Prefer running from the snapshot if it exists.
 if [ -d "$exp_dir/code" ]; then
   exp_name=$(basename "$exp_dir")
@@ -57,6 +65,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $exp_dir
+  python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $run_output_dir
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
