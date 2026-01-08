@@ -25,36 +25,49 @@ bind_home_path=/mnt/home/zli33
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
 input_folder=$bind_data_path/inputs
-output_folder=$bind_data_path/outputs
 
-# Snapshot location (preferred): EXP_DIR=/mnt/data/sam4d_body/outputs/exp_... set by submit script
+# Translate a host path under $data_path into the corresponding container path under $bind_data_path.
+host_to_container_path() {
+  local p="$1"
+  case "$p" in
+    "$data_path"/*) echo "$bind_data_path/${p#"$data_path"/}" ;;
+    *) echo "$p" ;;
+  esac
+}
+
+# Snapshot location (preferred): EXP_DIR as HOST path (e.g. /scratch/.../outputs/exp_...) set by submit script
 if [ -z "${EXP_DIR:-}" ]; then
   echo "[WARN] EXP_DIR not set; falling back to creating a fresh exp_dir at job start."
   timestamp=$(date +%Y%m%d_%H%M%S)
-  rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
-  exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
-  mkdir -p "$exp_dir"
+  rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+  )
+  exp_dir_host=$data_path/outputs/exp_${timestamp}_${rand_suffix}
+  mkdir -p "$exp_dir_host"
 else
-  exp_dir="$EXP_DIR"
-  mkdir -p "$exp_dir"
+  exp_dir_host="$EXP_DIR"
+  mkdir -p "$exp_dir_host"
 fi
 
 # Where to write stage-1 outputs (avoid clobbering e2e outputs)
-run_output_dir="${MASKLETS_DIR:-$exp_dir/masklets}"
-mkdir -p "$run_output_dir"
+run_output_dir_host="${MASKLETS_DIR:-$exp_dir_host/masklets}"
+mkdir -p "$run_output_dir_host"
+run_output_dir_container="$(host_to_container_path "$run_output_dir_host")"
 
 # Prefer running from the snapshot if it exists.
-if [ -d "$exp_dir/code" ]; then
-  exp_name=$(basename "$exp_dir")
-  project_folder=$bind_data_path/outputs/$exp_name/code
+if [ -d "$exp_dir_host/code" ]; then
+  exp_dir_container="$(host_to_container_path "$exp_dir_host")"
+  project_folder=$exp_dir_container/code
 else
-  echo "[WARN] No code snapshot found at $exp_dir/code; running from live repo in home."
+  echo "[WARN] No code snapshot found at $exp_dir_host/code; running from live repo in home."
   project_folder=$bind_home_path/projects/sam-body4d
 fi
 
-echo "[INFO] EXP_DIR=$exp_dir"
+echo "[INFO] EXP_DIR(host)=$exp_dir_host"
 echo "[INFO] project_folder=$project_folder"
-echo "[INFO] run_output_dir=$run_output_dir"
+echo "[INFO] run_output_dir_container=$run_output_dir_container"
 echo "[INFO] video=$input_folder/${VIDEO_REL:-cam04_cut_10s.mp4}"
 
 apptainer exec --nv \
@@ -67,6 +80,6 @@ apptainer exec --nv \
   python $project_folder/run_sam3_masklets.py \
     --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} \
     --config ${CONFIG_REL:-configs/body4d.yaml} \
-    --output $run_output_dir
+    --output $run_output_dir_container
 
 

@@ -24,35 +24,44 @@ bind_data_path=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
-output_folder=$bind_data_path/outputs
 
-# Snapshot location (preferred): EXP_DIR=/mnt/data/sam4d_body/outputs/exp_... set by submit script
+# Translate a host path under $data_path into the corresponding container path under $bind_data_path.
+host_to_container_path() {
+  local p="$1"
+  case "$p" in
+    "$data_path"/*) echo "$bind_data_path/${p#"$data_path"/}" ;;
+    *) echo "$p" ;;
+  esac
+}
+
+# Snapshot location (preferred): EXP_DIR as HOST path (e.g. /scratch/.../outputs/exp_...) set by submit script
 if [ -z "${EXP_DIR:-}" ]; then
   echo "[ERROR] EXP_DIR must be set (it should point to the snapshot exp folder)."
   exit 2
 fi
-exp_dir="$EXP_DIR"
+exp_dir_host="$EXP_DIR"
 
 # Stage-2 reads stage-1 outputs from this folder
-input_dir="${MASKLETS_DIR:-$exp_dir/masklets}"
-if [ ! -d "$input_dir" ]; then
-  echo "[ERROR] masklets input dir not found: $input_dir"
+input_dir_host="${MASKLETS_DIR:-$exp_dir_host/masklets}"
+input_dir_container="$(host_to_container_path "$input_dir_host")"
+if [ ! -d "$input_dir_host" ]; then
+  echo "[ERROR] masklets input dir not found (host): $input_dir_host"
   echo "        Run stage-1 first (masklets_test_delftblue.sh) or set MASKLETS_DIR."
   exit 2
 fi
 
 # Prefer running from the snapshot if it exists.
-if [ -d "$exp_dir/code" ]; then
-  exp_name=$(basename "$exp_dir")
-  project_folder=$bind_data_path/outputs/$exp_name/code
+if [ -d "$exp_dir_host/code" ]; then
+  exp_dir_container="$(host_to_container_path "$exp_dir_host")"
+  project_folder=$exp_dir_container/code
 else
-  echo "[WARN] No code snapshot found at $exp_dir/code; running from live repo in home."
+  echo "[WARN] No code snapshot found at $exp_dir_host/code; running from live repo in home."
   project_folder=$bind_home_path/projects/sam-body4d
 fi
 
-echo "[INFO] EXP_DIR=$exp_dir"
+echo "[INFO] EXP_DIR(host)=$exp_dir_host"
 echo "[INFO] project_folder=$project_folder"
-echo "[INFO] input_dir=$input_dir"
+echo "[INFO] input_dir_container=$input_dir_container"
 
 camera_args=()
 if [ -n "${CAMERA_INTRINSICS:-}" ]; then
@@ -68,7 +77,7 @@ apptainer exec --nv \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
   python $project_folder/run_sam3d_body_meshes.py \
-    --input $input_dir \
+    --input $input_dir_container \
     ${CONFIG_REL:+--config $CONFIG_REL} \
     ${BATCH_SIZE:+--batch-size $BATCH_SIZE} \
     ${NO_RENDER:+--no-render} \

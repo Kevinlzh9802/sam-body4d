@@ -24,37 +24,55 @@ bind_home_path=/mnt/home/zli33
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
 input_folder=$bind_data_path/inputs
-output_folder=$bind_data_path/outputs
+
+# Translate a host path under $data_path into the corresponding container path under $bind_data_path.
+host_to_container_path() {
+  local p="$1"
+  case "$p" in
+    "$data_path"/*) echo "$bind_data_path/${p#"$data_path"/}" ;;
+    *) echo "$p" ;;
+  esac
+}
 
 # Option 2: run from a snapshot created at SUBMISSION time.
-# The submit helper script should pass EXP_DIR=/mnt/data/sam4d_body/outputs/exp_... via sbatch --export.
+# The submit helper script passes EXP_DIR as a HOST path (e.g. /scratch/.../outputs/exp_...).
 if [ -z "${EXP_DIR:-}" ]; then
   echo "[WARN] EXP_DIR not set; falling back to creating a fresh exp_dir at job start."
   timestamp=$(date +%Y%m%d_%H%M%S)
-  rand_suffix=$(tr -dc 'A-Z0-9' </dev/urandom | head -c 4)
-  exp_dir=$output_folder/exp_${timestamp}_${rand_suffix}
-  mkdir -p "$exp_dir"
+  rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+  )
+  exp_dir_host=$data_path/outputs/exp_${timestamp}_${rand_suffix}
+  mkdir -p "$exp_dir_host"
 else
-  exp_dir="$EXP_DIR"
-  mkdir -p "$exp_dir"
+  exp_dir_host="$EXP_DIR"
+  mkdir -p "$exp_dir_host"
 fi
 
 # If you want to run multiple jobs under the same EXP_DIR (e.g., e2e + masklets + meshes),
 # set OUTPUT_SUBDIR (e.g., "e2e") to avoid clobbering images/masks in the root.
-run_output_dir="$exp_dir"
+run_output_dir_host="$exp_dir_host"
 if [ -n "${OUTPUT_SUBDIR:-}" ]; then
-  run_output_dir="$exp_dir/$OUTPUT_SUBDIR"
-  mkdir -p "$run_output_dir"
+  run_output_dir_host="$exp_dir_host/$OUTPUT_SUBDIR"
+  mkdir -p "$run_output_dir_host"
 fi
+run_output_dir_container="$(host_to_container_path "$run_output_dir_host")"
 
 # Prefer running from the snapshot if it exists.
-if [ -d "$exp_dir/code" ]; then
-  exp_name=$(basename "$exp_dir")
-  project_folder=$bind_data_path/outputs/$exp_name/code
+if [ -d "$exp_dir_host/code" ]; then
+  exp_name=$(basename "$exp_dir_host")
+  exp_dir_container="$(host_to_container_path "$exp_dir_host")"
+  project_folder="$exp_dir_container/code"
 else
-  echo "[WARN] No code snapshot found at $exp_dir/code; running from live repo in home."
+  echo "[WARN] No code snapshot found at $exp_dir_host/code; running from live repo in home."
   project_folder=$bind_home_path/projects/sam-body4d
 fi
+
+echo "[INFO] exp_dir_host=$exp_dir_host"
+echo "[INFO] run_output_dir_container=$run_output_dir_container"
+echo "[INFO] project_folder=$project_folder"
 
 # apptainer exec --nv --bind $neon_path:$bind_neon_path --bind $zli_path:$bind_zli_path $sif_path python $project_folder/infer_video.py --video $input_folder/cam04_cut_03.mp4 --output $output_folder 
 
@@ -65,6 +83,6 @@ apptainer exec --nv \
   --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
-  python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $run_output_dir
+  python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $run_output_dir_container
 
 # apptainer exec --env PYOPENGL_PLATFORM=osmesa $sif_path python -c "from OpenGL.osmesa import OSMesaCreateContextAttribs; print('ok')"
