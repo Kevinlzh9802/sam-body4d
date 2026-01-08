@@ -25,6 +25,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
+from tools.load_bbox_kp import load_bbox_kp
 
 
 def _cuda_mem_snapshot() -> Dict:
@@ -247,9 +248,6 @@ def main():
     predictor.clear_all_points_in_video(inference_state)
 
     out_obj_ids: List[int] = []
-    if args.boxes is None and args.points is None:
-        raise ValueError("You must provide either --boxes or --points.")
-
     if args.boxes is not None:
         print("[INFO] Adding box prompts...")
         for obj_id, frame_idx, box_abs in _parse_boxes(args.boxes):
@@ -276,6 +274,26 @@ def main():
                 obj_id=int(obj_id),
                 points=points_tensor,
                 labels=labels_tensor,
+            )
+
+    # If no prompts were provided, fall back to the current repo's hardcoded bbox source
+    # (mirrors `infer_video.py` behavior).
+    if args.boxes is None and args.points is None:
+        print("[WARN] No --boxes/--points provided; using hardcoded bboxes_kps_refined prompts (frame 0).")
+        bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
+        if bboxes_kps_data is None:
+            raise RuntimeError("Failed to load hardcoded bbox/kp pickle for prompts.")
+        selected_boxes = list(range(len(bboxes_kps_data[0]["bboxes"])))
+        pid_list = bboxes_kps_data[0]["pids"]
+        for bbox_idx in selected_boxes:
+            obj_id = int(pid_list[bbox_idx])
+            bbox = np.array(bboxes_kps_data[0]["bboxes"][bbox_idx], dtype=np.float32)
+            rel_box = bbox / np.array([width, height, width, height], dtype=np.float32)
+            _, out_obj_ids, _low_res_masks, _video_res_masks = predictor.add_new_points_or_box(
+                inference_state=inference_state,
+                frame_idx=0,
+                obj_id=obj_id,
+                box=rel_box,
             )
 
     out_obj_ids = sorted(list(set([int(x) for x in out_obj_ids])))
