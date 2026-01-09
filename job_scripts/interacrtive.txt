@@ -1,0 +1,5 @@
+srun --job-name="inference_interactive" --partition=compute --time=00:30:00 --ntasks=1 --cpus-per-task=8 --mem-per-cpu=1GB --pty bash
+
+srun --mpi=pmix --job-name="int_gpu_job" --partition=gpu --time=01:00:00 --ntasks=1 --cpus-per-task=4 --gpus-per-task=1 --mem-per-cpu=4G --account=research-eemcs-insy --pty /bin/bash -il
+
+apptainer exec --nv --bind /scratch/zli33/models/sam4d_checkpoints:/mnt/sam4d_checkpoints --bind /scratch/zli33/data/sam4d:/mnt/data/sam4d_body --bind /home/zli33:/mnt/home/zli33 --env PYTHONPATH=/mnt/home/zli33/projects/sam-body4d/models/sam3:/mnt/home/zli33/projects/sam-body4d:${PYTHONPATH:-} --env PYOPENGL_PLATFORM=osmesa /scratch/zli33/apptainers/body4d_osmesa.sif python /mnt/home/zli33/projects/sam-body4d/run_sam3_masklets.py --video /mnt/data/sam4d_body/inputs/cam04_cut_10s.mp4 --config configs/body4d.yaml --output /mnt/data/sam4d_body/outputs/exp_temp/masklets
