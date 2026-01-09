@@ -80,7 +80,7 @@ apptainer exec --nv \
   --bind $model_path:$bind_model_path \
   --bind $data_path:$bind_data_path \
   --bind $home_path:$bind_home_path \
-  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
+  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:${PYTHONPATH:-} \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
   python $project_folder/infer_video.py --video $input_folder/${VIDEO_REL:-cam04_cut_10s.mp4} --output $run_output_dir_container

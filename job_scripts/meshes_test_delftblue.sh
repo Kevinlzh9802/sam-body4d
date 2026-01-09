@@ -73,7 +73,7 @@ apptainer exec --nv \
   --bind $model_path:$bind_model_path \
   --bind $data_path:$bind_data_path \
   --bind $home_path:$bind_home_path \
-  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:$PYTHONPATH \
+  --env PYTHONPATH=$project_folder/models/sam3:$project_folder:${PYTHONPATH:-} \
   --env PYOPENGL_PLATFORM=osmesa \
   $sif_path \
   python $project_folder/run_sam3d_body_meshes.py \
