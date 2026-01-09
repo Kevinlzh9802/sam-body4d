@@ -17,6 +17,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,6 +41,14 @@ if sam3d_body_pkg_dir not in sys.path:
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.sam_3d_body.visualization.renderer import Renderer
 from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import load_raw_mhr
+from smoothing.stage3_core import (
+    Stage3Config,
+    stack_frames_to_tensors,
+    freeze_shape_scale_first_frame,
+    run_stage3_post_optimizations,
+)
+from smoothing.reproj_opt import ReprojOptConfig
+from smoothing.ground_plane_opt import GroundOptConfig
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 
 
@@ -64,127 +73,39 @@ def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimato
     return estimator
 
 
-def _stack_frames_to_tensors(
-    frames: List[Dict[str, Any]],
-    device: torch.device,
-) -> Tuple[Dict[str, torch.Tensor], List[List[int]], Dict[int, List[int]], List[str], List[int]]:
-    """
-    Convert raw frames payload into flattened tensors shaped (T*N, D).
-    We use a fixed slot order across all frames: sorted(all_obj_ids).
-
-    Returns:
-      mhr_dict: dict of tensors (B, D)
-      frame_obj_ids_slots: List[List[int]] length T, each list length N where missing -> 0
-      vis_flags: dict[obj_id] -> List[0/1] length T
-      frame_names: List[str] length T
-      obj_ids_all: sorted list of obj_ids (slot order)
-    """
-    T = len(frames)
-    frame_names = [str(fr.get("frame", f"{i:08d}")) for i, fr in enumerate(frames)]
-    # gather all obj_ids
-    obj_set = set()
-    for fr in frames:
-        for p in fr.get("people", []):
-            if p is None:
-                continue
-            oid = p.get("obj_id", None)
-            if oid is not None:
-                obj_set.add(int(oid))
-    obj_ids_all = sorted(obj_set)
-    N = len(obj_ids_all)
-    if N == 0:
-        raise ValueError("No people found in raw payload.")
-
-    # slot mapping
-    slot_of = {oid: si for si, oid in enumerate(obj_ids_all)}
-
-    # Build per-frame slot list and visibility flags
-    frame_obj_ids_slots: List[List[int]] = []
-    vis_flags: Dict[int, List[int]] = {oid: [0] * T for oid in obj_ids_all}
-    for ti, fr in enumerate(frames):
-        slots = [0] * N
-        for p in fr.get("people", []):
-            if p is None:
-                continue
-            oid = int(p.get("obj_id"))
-            si = slot_of.get(oid, None)
-            if si is None:
-                continue
-            slots[si] = oid
-            vis_flags[oid][ti] = 1
-        frame_obj_ids_slots.append(slots)
-
-    # Infer dimensions from first present entry
-    def first_shape(key: str) -> int:
-        for fr in frames:
-            for p in fr.get("people", []):
-                v = p.get(key, None)
-                if v is not None:
-                    arr = np.asarray(v)
-                    return int(arr.reshape(-1).shape[0])
-        return 0
-
-    dims = {
-        "global_rot": first_shape("global_rot"),
-        "body_pose": first_shape("body_pose"),
-        "hand": first_shape("hand"),
-        "scale": first_shape("scale"),
-        "shape": first_shape("shape"),
-        "face": first_shape("face"),
-        "pred_cam_t": first_shape("pred_cam_t"),
-        "focal_length": 1,
-    }
-
-    B = T * N
-    mhr: Dict[str, torch.Tensor] = {}
-    for k, d in dims.items():
-        if d <= 0:
-            continue
-        mhr[k] = torch.zeros((B, d), dtype=torch.float32, device=device)
-
-    # Fill tensors
-    for ti, fr in enumerate(frames):
-        for p in fr.get("people", []):
-            oid = int(p.get("obj_id"))
-            si = slot_of[oid]
-            bi = ti * N + si
-            for k in ["global_rot", "body_pose", "hand", "scale", "shape", "face", "pred_cam_t"]:
-                if k not in mhr:
-                    continue
-                v = p.get(k, None)
-                if v is None:
-                    continue
-                vv = torch.from_numpy(np.asarray(v, dtype=np.float32).reshape(-1)).to(device)
-                if vv.numel() == mhr[k].shape[1]:
-                    mhr[k][bi] = vv
-            if "focal_length" in mhr:
-                fl = p.get("focal_length", None)
-                if fl is not None:
-                    mhr["focal_length"][bi, 0] = float(np.asarray(fl).reshape(-1)[0])
-
-    return mhr, frame_obj_ids_slots, vis_flags, frame_names, obj_ids_all
-
-
-def _freeze_shape_scale_first_frame(mhr: Dict[str, torch.Tensor], T: int, N: int) -> None:
-    # In-place: set shape/scale for each slot to first frame values across time.
-    if "shape" in mhr:
-        shp = mhr["shape"].view(T, N, -1)
-        first = shp[0].clone()
-        shp[:] = first[None, :, :]
-        mhr["shape"] = shp.view(T * N, -1)
-    if "scale" in mhr:
-        sc = mhr["scale"].view(T, N, -1)
-        first = sc[0].clone()
-        sc[:] = first[None, :, :]
-        mhr["scale"] = sc.view(T * N, -1)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 3: smooth raw params and export meshes")
     parser.add_argument("--raw", required=True, help="raw_mhr.pt from run_sam3d_body_raw_params.py")
     parser.add_argument("--config", default=None, help="Config YAML (default: configs/body4d.yaml)")
     parser.add_argument("--out", default=None, help="Output dir (default: alongside raw file)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", choices=["cuda", "cpu"])
+    # Option selection
+    parser.add_argument("--no-option1", action="store_true", help="Disable built-in Option1 smoothing (EMA/Kalman + shape/scale freeze).")
+    parser.add_argument("--enable-reproj", action="store_true", help="Enable Option2 robust 2D reprojection optimization (adjust pred_cam_t).")
+    parser.add_argument("--enable-ground", action="store_true", help="Enable ground-plane/contact optimization (adjust pred_cam_t in world coords).")
+
+    # Reprojection inputs/knobs
+    parser.add_argument("--bbox-kps-pkl", default=None, help="bboxes_kps_data pickle (observed 2D kps with kp_idx in mhr70).")
+    parser.add_argument("--camera-intrinsics-json", default=None, help="Camera intrinsics json (scaled by --camera-scale).")
+    parser.add_argument("--camera-scale", type=float, default=0.5)
+    parser.add_argument("--reproj-iters", type=int, default=200)
+    parser.add_argument("--reproj-lr", type=float, default=0.05)
+    parser.add_argument("--reproj-huber-delta", type=float, default=10.0)
+    parser.add_argument("--reproj-lambda-prior", type=float, default=0.1)
+    parser.add_argument("--reproj-lambda-vel", type=float, default=1.0)
+    parser.add_argument("--reproj-lambda-accel", type=float, default=0.5)
+    parser.add_argument("--obs-scale-cands", nargs="*", type=float, default=[1.0, 0.5, 2.0])
+
+    # Ground inputs/knobs
+    parser.add_argument("--extrinsics-json", default=None, help="Extrinsics json (OpenCV solvePnP: rotation, translation).")
+    parser.add_argument("--ground-iters", type=int, default=200)
+    parser.add_argument("--ground-lr", type=float, default=0.05)
+    parser.add_argument("--ground-lambda-plane", type=float, default=5.0)
+    parser.add_argument("--ground-lambda-slide", type=float, default=1.0)
+    parser.add_argument("--ground-lambda-prior", type=float, default=0.2)
+    parser.add_argument("--ground-lambda-vel", type=float, default=1.0)
+    parser.add_argument("--contact-z-thresh", type=float, default=0.03)
+    parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
     args = parser.parse_args()
 
     payload = load_raw_mhr(args.raw, map_location="cpu")
@@ -201,29 +122,30 @@ def main() -> None:
     print(f"[INFO] Using device: {device}")
     estimator = build_sam3d_body_from_config(cfg, device=device)
 
-    mhr, frame_obj_ids_slots, vis_flags, frame_names, obj_ids_all = _stack_frames_to_tensors(frames, device=device)
+    mhr, frame_obj_ids_slots, vis_flags, frame_names, obj_ids_all = stack_frames_to_tensors(frames, device=device)
     T = len(frame_names)
     N = len(obj_ids_all)
     print(f"[INFO] Loaded raw: T={T}, N={N}, obj_ids={obj_ids_all[:10]}{'...' if N>10 else ''}")
 
     # --- Option 1 smoothing over full sequence ---
-    mhr = kalman_smooth_mhr_params_per_obj_id_adaptive(
-        mhr_dict=mhr,
-        num_frames=T,
-        frame_obj_ids=frame_obj_ids_slots,
-        keys_to_smooth=[k for k in ["body_pose", "hand", "pred_cam_t"] if k in mhr],
-        kalman_cfg=None,
-        vis_flags=vis_flags,
-    )
-    _freeze_shape_scale_first_frame(mhr, T=T, N=N)
-    if "global_rot" in mhr:
-        mhr = ema_smooth_global_rot_per_obj_id_adaptive(
+    if not args.no_option1:
+        mhr = kalman_smooth_mhr_params_per_obj_id_adaptive(
             mhr_dict=mhr,
             num_frames=T,
             frame_obj_ids=frame_obj_ids_slots,
+            keys_to_smooth=[k for k in ["body_pose", "hand", "pred_cam_t"] if k in mhr],
+            kalman_cfg=None,
             vis_flags=vis_flags,
-            key_name="global_rot",
         )
+        freeze_shape_scale_first_frame(mhr, T=T, N=N)
+        if "global_rot" in mhr:
+            mhr = ema_smooth_global_rot_per_obj_id_adaptive(
+                mhr_dict=mhr,
+                num_frames=T,
+                frame_obj_ids=frame_obj_ids_slots,
+                vis_flags=vis_flags,
+                key_name="global_rot",
+            )
 
     # --- Recompute meshes via MHR forward ---
     head_pose = estimator.model.head_pose
@@ -261,6 +183,56 @@ def main() -> None:
     # Camera system difference (match existing pipeline)
     verts[..., [1, 2]] *= -1
     j3d[..., [1, 2]] *= -1
+
+    # Option2 / ground: operate on pred_cam_t, using keypoints3d before translation.
+    if args.enable_reproj or args.enable_ground:
+        cfg3 = Stage3Config(
+            enable_option1=(not args.no_option1),
+            enable_reproj=bool(args.enable_reproj),
+            enable_ground=bool(args.enable_ground),
+            bbox_kps_pkl=args.bbox_kps_pkl,
+            camera_intrinsics_json=args.camera_intrinsics_json,
+            camera_scale=float(args.camera_scale),
+            reproj_cfg=ReprojOptConfig(
+                iters=int(args.reproj_iters),
+                lr=float(args.reproj_lr),
+                huber_delta_px=float(args.reproj_huber_delta),
+                lambda_prior=float(args.reproj_lambda_prior),
+                lambda_vel=float(args.reproj_lambda_vel),
+                lambda_accel=float(args.reproj_lambda_accel),
+                obs_scale_candidates=tuple(float(x) for x in args.obs_scale_cands),
+            ),
+            extrinsics_json=args.extrinsics_json,
+            ground_cfg=GroundOptConfig(
+                iters=int(args.ground_iters),
+                lr=float(args.ground_lr),
+                lambda_plane=float(args.ground_lambda_plane),
+                lambda_slide=float(args.ground_lambda_slide),
+                lambda_prior=float(args.ground_lambda_prior),
+                lambda_vel=float(args.ground_lambda_vel),
+                contact_z_thresh=float(args.contact_z_thresh),
+                contact_v_xy_thresh=float(args.contact_vxy_thresh),
+            ),
+        )
+
+        # keypoints3d_local: (T*N,70,3) without translation; that's `j3d` here.
+        mhr, opt_summary = run_stage3_post_optimizations(
+            cfg=cfg3,
+            device=device,
+            mhr=mhr,
+            frame_names=frame_names,
+            obj_ids_all=obj_ids_all,
+            frame_obj_ids_slots=frame_obj_ids_slots,
+            vis_flags=vis_flags,
+            keypoints3d_local=j3d,
+        )
+
+        # Apply updated pred_cam_t to verts for export (do not change verts topology)
+        pred_cam_t = mhr["pred_cam_t"]
+        out_dir = args.out or os.path.join(os.path.dirname(args.raw), "smoothed_export")
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "stage3_opt_summary.json"), "w", encoding="utf-8") as f:
+            json.dump(opt_summary, f, indent=2)
 
     out_dir = args.out or os.path.join(os.path.dirname(args.raw), "smoothed_export")
     mesh_dir = os.path.join(out_dir, "mesh_4d_individual")
