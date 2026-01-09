@@ -1,5 +1,7 @@
 from PIL import Image
 from PIL import ImageDraw
+import os
+import pickle
 
 
 def draw_point_marker(image: Image.Image, x: int, y: int, point_type: str) -> Image.Image:
@@ -69,3 +71,14 @@ def draw_point_marker(image: Image.Image, x: int, y: int, point_type: str) -> Im
         )
 
     return img
+
+def load_bbox_kp(bbox_kp_folder: str, folder_name: str):
+    """
+    Load bboxes and kps from a folder.
+    """
+    bboxes_kps_data = None
+    if len(bbox_kp_folder):
+        keypoint_path = os.path.join(bbox_kp_folder, f"{folder_name}.pkl")
+        with open(keypoint_path, "rb") as kp_f:
+            bboxes_kps_data = pickle.load(kp_f)
+    return bboxes_kps_data

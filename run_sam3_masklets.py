@@ -25,7 +25,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
-from tools.load_bbox_kp import load_bbox_kp
+from utils.image_utils import load_bbox_kp
 
 
 def _cuda_mem_snapshot() -> Dict:
