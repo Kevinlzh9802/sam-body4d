@@ -2120,6 +2120,9 @@ class SAM3DBody(BaseModel):
 
         # Re-run forward
         with torch.no_grad():
+            # If enabled, skip temporal smoothing/shape-freezing to expose "raw" per-frame outputs.
+            # This is useful for a decoupled Stage2 (raw params dump) -> Stage3 (sequence smoothing) pipeline.
+            disable_temporal_smoothing = os.environ.get("SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING", "").strip() not in ("", "0", "false", "False")
 
             # # # # smooth before generating mesh parameters
             # kalman_cfg = {
@@ -2137,54 +2140,57 @@ class SAM3DBody(BaseModel):
             #     # kalman_cfg=kalman_cfg,
             # )
 
-            pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
-                mhr_dict=pose_output["mhr"],
-                num_frames=len(img_list),
-                frame_obj_ids=id_batch,
-                # Also smooth camera translation, since exported meshes are vertices + pred_cam_t.
-                # This greatly reduces world/camera-space jitter that affects interpersonal distances.
-                keys_to_smooth=["body_pose", "hand", "pred_cam_t"],
-                kalman_cfg=None,
-                vis_flags=occ_dict
-            )
+            if not disable_temporal_smoothing:
+                pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+                    mhr_dict=pose_output["mhr"],
+                    num_frames=len(img_list),
+                    frame_obj_ids=id_batch,
+                    # Also smooth camera translation, since exported meshes are vertices + pred_cam_t.
+                    # This greatly reduces world/camera-space jitter that affects interpersonal distances.
+                    keys_to_smooth=["body_pose", "hand", "pred_cam_t"],
+                    kalman_cfg=None,
+                    vis_flags=occ_dict
+                )
 
             # -----------------
-            # keep shape & scale same as the first frame
-            num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
-            scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
-            shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
-            B, D_scale = scale.shape
-            _, D_shape = shape.shape
-            num_frames = len(img_list)
-            # Reshape to (T, N, D) so that we can index by (frame, human)
-            scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
-            shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
-            # For each human id, use its scale/shape from the first frame (t=0)
-            # and assign it to all frames for that human.
-            for hid in range(num_human):
-                # (28,) and (45,), values at t=0 for this human
-                if hid not in mhr_shape_scale_dict:
-                    mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
-                    first_scale = scale_3d[0, hid].clone()
-                    first_shape = shape_3d[0, hid].clone()
-                else:
-                    first_scale, first_shape = mhr_shape_scale_dict[hid]
-                # Broadcast to all time steps for this human
-                scale_3d[:, hid, :] = first_scale
-                shape_3d[:, hid, :] = first_shape
-            # Back to original shape: (B, D)
-            pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
-            pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
+            if not disable_temporal_smoothing:
+                # keep shape & scale same as the first frame
+                num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
+                scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
+                shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
+                B, D_scale = scale.shape
+                _, D_shape = shape.shape
+                num_frames = len(img_list)
+                # Reshape to (T, N, D) so that we can index by (frame, human)
+                scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
+                shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
+                # For each human id, use its scale/shape from the first frame (t=0)
+                # and assign it to all frames for that human.
+                for hid in range(num_human):
+                    # (28,) and (45,), values at t=0 for this human
+                    if hid not in mhr_shape_scale_dict:
+                        mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
+                        first_scale = scale_3d[0, hid].clone()
+                        first_shape = shape_3d[0, hid].clone()
+                    else:
+                        first_scale, first_shape = mhr_shape_scale_dict[hid]
+                    # Broadcast to all time steps for this human
+                    scale_3d[:, hid, :] = first_scale
+                    shape_3d[:, hid, :] = first_shape
+                # Back to original shape: (B, D)
+                pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
+                pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
 
             # # -----------------
             # # smooth global rot
-            pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
-                mhr_dict=pose_output["mhr"],
-                num_frames=len(img_list),
-                frame_obj_ids=id_batch,
-                vis_flags=occ_dict,
-                key_name="global_rot",
-            )
+            if not disable_temporal_smoothing:
+                pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
+                    mhr_dict=pose_output["mhr"],
+                    num_frames=len(img_list),
+                    frame_obj_ids=id_batch,
+                    vis_flags=occ_dict,
+                    key_name="global_rot",
+                )
 
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(
