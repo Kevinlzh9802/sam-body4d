@@ -9,8 +9,8 @@ set -euo pipefail
 # - Submits the Slurm job, passing EXP_DIR to the job script
 #
 # Usage (run on login node):
-#   bash job_scripts/submit_inference_delftblue_snapshot.sh
-#   bash job_scripts/submit_inference_delftblue_snapshot.sh --video cam04_cut_10s.mp4
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode masklets --video cam04_cut_10s.mp4
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode raw_params --input /scratch/.../outputs/exp_XXXX
 #
 # You can still edit your repo after submission; the job will run the frozen snapshot.
 
@@ -23,13 +23,15 @@ output_folder=$data_path/outputs
 input_folder=$data_path/inputs
 
 repo_dir=$home_path/projects/sam-body4d
-job_script_e2e=$repo_dir/job_scripts/inference_test_delftblue.sh
 job_script_masklets=$repo_dir/job_scripts/masklets_test_delftblue.sh
 job_script_meshes=$repo_dir/job_scripts/meshes_test_delftblue.sh
+job_script_raw_params=$repo_dir/job_scripts/raw_params_test_delftblue.sh
 
 video_rel="cam04_cut_10s.mp4"
-mode="e2e" # e2e | masklets | meshes
+mode="masklets" # masklets | raw_params
 exp_dir_override=""
+input_dir=""
+stage1_dir_host=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +41,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --video)
       video_rel="$2"
+      shift 2
+      ;;
+    --input|--input-dir|--stage1-dir)
+      input_dir="$2"
       shift 2
       ;;
     --exp-dir)
@@ -51,6 +57,28 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [ "$mode" = "raw_params" ]; then
+  # For raw params, the user provides the experiment folder (.../exp_XXXX) and we
+  # auto-complete the Stage1 folder as <exp_XXXX>/masklets.
+  if [ -z "${input_dir:-}" ]; then
+    echo "[ERROR] --mode raw_params requires --input <exp_dir_host> (e.g. .../exp_XXXX)" >&2
+    exit 2
+  fi
+
+  # Require the experiment dir (exp_XXXX) only; always derive Stage1 as <exp_XXXX>/masklets.
+  if [ "$(basename "$input_dir")" = "masklets" ]; then
+    echo "[ERROR] --input must be the experiment folder (e.g. .../exp_XXXX), not .../exp_XXXX/masklets" >&2
+    exit 2
+  fi
+  exp_dir_from_input="$input_dir"
+  stage1_dir_host="$input_dir/masklets"
+
+  # If the user didn't explicitly set --exp-dir, use the one derived from --input.
+  if [ -z "${exp_dir_override:-}" ]; then
+    exp_dir_override="$exp_dir_from_input"
+  fi
+fi
 
 if [ -n "${exp_dir_override:-}" ]; then
   exp_dir="$exp_dir_override"
@@ -82,26 +110,21 @@ PY
 fi
 
 echo "[INFO] Submitting job with EXP_DIR=$exp_dir"
-echo "[INFO] Video: $input_folder/$video_rel"
 
 # Pass EXP_DIR so the compute job uses the snapshot.
-# Also pass VIDEO_REL so you can change it without editing job scripts.
-#
 case "$mode" in
-  e2e)
-    # E2E pipeline (infer_video.py). Writes under EXP_DIR/e2e to avoid clobbering other jobs.
-    sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel,OUTPUT_SUBDIR=e2e "$job_script_e2e"
-    ;;
   masklets)
     # Stage 1 only (SAM-3 -> masks). Writes under EXP_DIR/masklets by default.
+    echo "[INFO] Video: $input_folder/$video_rel"
     sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel "$job_script_masklets"
     ;;
-  meshes)
-    # Stage 2 only (SAM 3D Body from saved masks). Reads EXP_DIR/masklets by default.
-    sbatch --export=ALL,EXP_DIR=$exp_dir "$job_script_meshes"
+  raw_params)
+    # Stage 2 (decoupled): masks/images -> raw params. Requires Stage1 dir as input.
+    echo "[INFO] Input (Stage1 dir): $stage1_dir_host"
+    sbatch --export=ALL,EXP_DIR=$exp_dir "$job_script_raw_params" "$stage1_dir_host"
     ;;
   *)
-    echo "[ERROR] Unknown --mode: $mode (expected: e2e|masklets|meshes)" >&2
+    echo "[ERROR] Unknown --mode: $mode (expected: masklets|raw_params)" >&2
     exit 2
     ;;
 esac
