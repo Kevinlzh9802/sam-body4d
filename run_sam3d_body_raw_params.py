@@ -83,9 +83,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 2: dump raw MHR params from masks/images")
     parser.add_argument("--input", required=True, help="Stage1 output dir (contains images/, masks/)")
     parser.add_argument("--config", default=None, help="Config YAML (default: configs/body4d.yaml)")
-    parser.add_argument("--batch-size", type=int, default=1, help="Frames per inference call (throughput only)")
+    parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference call (throughput only)")
     parser.add_argument("--out", default=None, help="Output .pt path (default: <input>/raw_mhr.pt)")
-    parser.add_argument("--camera-intrinsics", default=None, help="Optional intrinsics JSON (scaled by --camera-scale)")
     parser.add_argument("--camera-scale", type=float, default=0.5)
     args = parser.parse_args()
 
@@ -111,10 +110,13 @@ def main() -> None:
     # This preserves original pipeline defaults (env var unset).
     os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
 
-    cam_int = None
-    if args.camera_intrinsics:
-        K, dist = read_camera_intrinsics(args.camera_intrinsics, scale=float(args.camera_scale))
-        cam_int = (torch.from_numpy(K).to(device), torch.from_numpy(dist).to(device))
+    # Camera intrinsics are loaded from a fixed location relative to the input dir.
+    # Example: <input>/../../inputs/camera_intrinsics/intrinsic_4.json
+    camera_intrinsics_path = os.path.normpath(
+        os.path.join(input_dir, "..", "..", "inputs", "camera_intrinsics", "intrinsic_4.json")
+    )
+    K, dist = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
+    cam_int = (torch.from_numpy(K).to(device), torch.from_numpy(dist).to(device))
 
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
@@ -194,7 +196,7 @@ def main() -> None:
         "meta": {
             "input_dir": input_dir,
             "config_path": cfg_path,
-            "camera_intrinsics": args.camera_intrinsics,
+            "camera_intrinsics": camera_intrinsics_path,
             "camera_scale": float(args.camera_scale),
             "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
         },
