@@ -37,24 +37,7 @@ from models.sam_3d_body.notebook.utils import (
     save_mesh_results,
 )
 from models.sam_3d_body.tools.vis_utils import visualize_sample_together, visualize_sample
-
-
-def _cuda_mem_snapshot() -> Dict:
-    if not torch.cuda.is_available():
-        return {"cuda_available": False}
-    torch.cuda.synchronize()
-    return {
-        "cuda_available": True,
-        "device": str(torch.cuda.get_device_name(0)),
-        "max_memory_allocated_bytes": int(torch.cuda.max_memory_allocated()),
-        "max_memory_reserved_bytes": int(torch.cuda.max_memory_reserved()),
-    }
-
-
-def _write_json(path: str, payload: Dict) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 
 
 def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
@@ -163,8 +146,7 @@ def main():
     print(f"[INFO] Loading SAM 3D Body from config: {cfg_path}")
     estimator = build_sam3d_body_from_config(cfg, device=device)
 
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+    cuda_reset_peak_memory_stats()
 
     cam_int = None
     if args.camera_intrinsics:
@@ -244,8 +226,8 @@ def main():
                     os.makedirs(obj_dir, exist_ok=True)
                     cv2.imwrite(os.path.join(obj_dir, f"{frame_name}_{obj_id}.jpg"), rend_img_i.astype(np.uint8))
 
-    mem = _cuda_mem_snapshot()
-    _write_json(os.path.join(input_dir, "gpu_mem_stage2.json"), mem)
+    mem = cuda_mem_snapshot()
+    write_json(os.path.join(input_dir, "gpu_mem_stage2.json"), mem)
     print(f"[INFO] Peak GPU memory (stage2): {mem}")
     print(f"[INFO] Done. Meshes in: {mesh_dir}")
 

@@ -11,7 +11,6 @@ Outputs in <output_dir>/:
 """
 
 import argparse
-import json
 import os
 import time
 from typing import Dict, List, Tuple
@@ -26,24 +25,7 @@ from tqdm import tqdm
 
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
 from utils.image_utils import load_bbox_kp
-
-
-def _cuda_mem_snapshot() -> Dict:
-    if not torch.cuda.is_available():
-        return {"cuda_available": False}
-    torch.cuda.synchronize()
-    return {
-        "cuda_available": True,
-        "device": str(torch.cuda.get_device_name(0)),
-        "max_memory_allocated_bytes": int(torch.cuda.max_memory_allocated()),
-        "max_memory_reserved_bytes": int(torch.cuda.max_memory_reserved()),
-    }
-
-
-def _write_json(path: str, payload: Dict) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 
 
 def read_video_metadata(path: str) -> Tuple[float, int, int, int]:
@@ -240,8 +222,7 @@ def main():
     print("[INFO] Initializing SAM-3 model...")
     _, predictor = build_sam3_from_config(cfg)
 
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+    cuda_reset_peak_memory_stats()
 
     print("[INFO] Initializing SAM-3 inference state...")
     inference_state = predictor.init_state(video_path=args.video)
@@ -321,10 +302,10 @@ def main():
         "image_dir": os.path.join(os.path.abspath(output_dir), "images"),
         "masks_dir": os.path.join(os.path.abspath(output_dir), "masks"),
     }
-    _write_json(os.path.join(output_dir, "masklets_meta.json"), meta)
+    write_json(os.path.join(output_dir, "masklets_meta.json"), meta)
 
-    mem = _cuda_mem_snapshot()
-    _write_json(os.path.join(output_dir, "gpu_mem_stage1.json"), mem)
+    mem = cuda_mem_snapshot()
+    write_json(os.path.join(output_dir, "gpu_mem_stage1.json"), mem)
     print(f"[INFO] Peak GPU memory (stage1): {mem}")
     print("[INFO] Done.")
 

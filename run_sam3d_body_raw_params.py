@@ -19,6 +19,7 @@ import argparse
 import glob
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -35,6 +36,7 @@ sys.path.append(os.path.join(REPO_DIR, "models", "sam_3d_body"))
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask
 from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import save_raw_mhr
+from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 
 
 def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
@@ -87,6 +89,8 @@ def main() -> None:
     parser.add_argument("--camera-scale", type=float, default=0.5)
     args = parser.parse_args()
 
+    t0 = time.time()
+
     input_dir = args.input
     image_dir = os.path.join(input_dir, "images")
     masks_dir = os.path.join(input_dir, "masks")
@@ -101,6 +105,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}")
     estimator = build_sam3d_body_from_config(cfg, device=device)
+    cuda_reset_peak_memory_stats()
 
     # Disable temporal smoothing inside the model to produce "raw" params.
     # This preserves original pipeline defaults (env var unset).
@@ -196,6 +201,11 @@ def main() -> None:
     }
     save_raw_mhr(out_path, payload)
     print(f"[INFO] Saved raw params to: {out_path}")
+
+    mem = cuda_mem_snapshot()
+    mem["wall_time_sec"] = float(time.time() - t0)
+    write_json(os.path.join(input_dir, "gpu_mem_stage2.json"), mem)
+    print(f"[INFO] Peak GPU memory (stage2): {mem}")
 
 
 if __name__ == "__main__":
