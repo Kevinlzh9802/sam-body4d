@@ -52,16 +52,39 @@ fi
 
 stage1_dir_container="$(host_to_container_path "$stage1_dir_host")"
 
-# Prefer running from the snapshot if it exists.
-if [ -n "${EXP_DIR:-}" ] && [ -d "$EXP_DIR/code" ]; then
-  exp_dir_host="$EXP_DIR"
-  exp_dir_container="$(host_to_container_path "$exp_dir_host")"
-  project_folder=$exp_dir_container/code
+# This job creates its own dedicated code snapshot under EXP_DIR (host path).
+# IMPORTANT: do NOT reuse or search for any existing `$EXP_DIR/code` snapshot here.
+project_folder=""
+if [ -z "${EXP_DIR:-}" ]; then
+  echo "[ERROR] EXP_DIR must be set (host path) for this job." >&2
+  echo "        Example: sbatch --export=ALL,EXP_DIR=/scratch/.../outputs/exp_XXXX ..." >&2
+  exit 2
+fi
+
+exp_dir_host="$EXP_DIR"
+timestamp=$(date +%Y%m%d_%H%M%S)
+rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+)
+rp_dir_host="$exp_dir_host/exp_s2_${timestamp}_${rand_suffix}"
+code_snapshot_host="$rp_dir_host/code"
+mkdir -p "$code_snapshot_host"
+echo "[INFO] Creating raw-params code snapshot in: $code_snapshot_host"
+
+repo_dir="$home_path/projects/sam-body4d"
+if rsync -a --delete \
+  --exclude ".git" \
+  --exclude "__pycache__" \
+  --exclude "*.pyc" \
+  --exclude "outputs" \
+  "$repo_dir/" \
+  "$code_snapshot_host/" ; then
+  project_folder="$(host_to_container_path "$code_snapshot_host")"
 else
-  if [ -n "${EXP_DIR:-}" ]; then
-    echo "[WARN] EXP_DIR is set but no snapshot found at $EXP_DIR/code; running from live repo in home."
-  fi
-  project_folder=$bind_home_path/projects/sam-body4d
+  echo "[WARN] Failed to create raw-params code snapshot; running from live repo in home."
+  project_folder="$bind_home_path/projects/sam-body4d"
 fi
 
 echo "[INFO] project_folder=$project_folder"
