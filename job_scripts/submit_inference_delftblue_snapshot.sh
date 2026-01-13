@@ -32,6 +32,9 @@ mode="masklets" # masklets | raw_params
 exp_dir_override=""
 input_dir=""
 stage1_dir_host=""
+s2_dir_host=""
+s2_code_dir_host=""
+use_live_code="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,9 +122,42 @@ case "$mode" in
     sbatch --export=ALL,EXP_DIR=$exp_dir,VIDEO_REL=$video_rel "$job_script_masklets"
     ;;
   raw_params)
-    # Stage 2 (decoupled): masks/images -> raw params. Requires Stage1 dir as input.
+    # Stage 2 (decoupled): masks/images -> raw params.
+    # IMPORTANT: create exp_s2_*/code snapshot AT SUBMISSION TIME (not at job start).
+    if [ -z "${stage1_dir_host:-}" ]; then
+      echo "[ERROR] Internal error: stage1_dir_host not set for raw_params mode." >&2
+      exit 2
+    fi
+
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+    )
+    s2_dir_host="$exp_dir/exp_s2_${timestamp}_${rand_suffix}"
+    s2_code_dir_host="$s2_dir_host/code"
+    mkdir -p "$s2_code_dir_host"
+    echo "[INFO] Creating stage-2 snapshot in: $s2_code_dir_host"
+
+    if rsync -a --delete \
+      --exclude ".git" \
+      --exclude "__pycache__" \
+      --exclude "*.pyc" \
+      --exclude "outputs" \
+      "$repo_dir/" \
+      "$s2_code_dir_host/" ; then
+      use_live_code="0"
+    else
+      echo "[WARN] Failed to snapshot stage-2 code at submission; job will use live repo at runtime." >&2
+      use_live_code="1"
+      s2_code_dir_host=""
+    fi
+
     echo "[INFO] Input (Stage1 dir): $stage1_dir_host"
-    sbatch --export=ALL,EXP_DIR=$exp_dir "$job_script_raw_params" "$stage1_dir_host"
+    echo "[INFO] EXP_S2_DIR: $s2_dir_host"
+    sbatch --export=ALL,EXP_DIR=$exp_dir,S2_CODE_DIR_HOST=$s2_code_dir_host,USE_LIVE_CODE=$use_live_code \
+      "$job_script_raw_params" "$stage1_dir_host"
     ;;
   *)
     echo "[ERROR] Unknown --mode: $mode (expected: masklets|raw_params)" >&2

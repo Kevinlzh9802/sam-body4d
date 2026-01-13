@@ -52,7 +52,7 @@ fi
 
 stage1_dir_container="$(host_to_container_path "$stage1_dir_host")"
 
-# This job creates its own dedicated code snapshot under EXP_DIR (host path).
+# This job uses a dedicated stage-2 code snapshot created AT SUBMISSION TIME under EXP_DIR/exp_s2_*/code.
 # IMPORTANT: do NOT reuse or search for any existing `$EXP_DIR/code` snapshot here.
 project_folder=""
 if [ -z "${EXP_DIR:-}" ]; then
@@ -61,30 +61,21 @@ if [ -z "${EXP_DIR:-}" ]; then
   exit 2
 fi
 
-exp_dir_host="$EXP_DIR"
-timestamp=$(date +%Y%m%d_%H%M%S)
-rand_suffix=$(python3 - <<'PY'
-import random, string
-print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
-PY
-)
-rp_dir_host="$exp_dir_host/exp_s2_${timestamp}_${rand_suffix}"
-code_snapshot_host="$rp_dir_host/code"
-mkdir -p "$code_snapshot_host"
-echo "[INFO] Creating raw-params code snapshot in: $code_snapshot_host"
-
-repo_dir="$home_path/projects/sam-body4d"
-if rsync -a --delete \
-  --exclude ".git" \
-  --exclude "__pycache__" \
-  --exclude "*.pyc" \
-  --exclude "outputs" \
-  "$repo_dir/" \
-  "$code_snapshot_host/" ; then
-  project_folder="$(host_to_container_path "$code_snapshot_host")"
-else
-  echo "[WARN] Failed to create raw-params code snapshot; running from live repo in home."
+if [ "${USE_LIVE_CODE:-0}" = "1" ]; then
+  echo "[WARN] USE_LIVE_CODE=1; running from live repo in home."
   project_folder="$bind_home_path/projects/sam-body4d"
+else
+  if [ -z "${S2_CODE_DIR_HOST:-}" ]; then
+    echo "[WARN] S2_CODE_DIR_HOST not set; running from live repo in home."
+    project_folder="$bind_home_path/projects/sam-body4d"
+  else
+    if [ ! -d "$S2_CODE_DIR_HOST" ]; then
+      echo "[WARN] S2_CODE_DIR_HOST does not exist: $S2_CODE_DIR_HOST; running from live repo in home."
+      project_folder="$bind_home_path/projects/sam-body4d"
+    else
+      project_folder="$(host_to_container_path "$S2_CODE_DIR_HOST")"
+    fi
+  fi
 fi
 
 echo "[INFO] project_folder=$project_folder"
