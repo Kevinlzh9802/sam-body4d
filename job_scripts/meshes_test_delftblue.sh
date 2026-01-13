@@ -50,16 +50,37 @@ if [ ! -d "$input_dir_host" ]; then
   exit 2
 fi
 
-# Prefer running from the snapshot if it exists.
-if [ -d "$exp_dir_host/code" ]; then
-  exp_dir_container="$(host_to_container_path "$exp_dir_host")"
-  project_folder=$exp_dir_container/code
+# Stage-2 gets its own dedicated code snapshot under EXP_DIR.
+# IMPORTANT: do NOT reuse or search for any existing `$exp_dir_host/code` snapshot here.
+timestamp=$(date +%Y%m%d_%H%M%S)
+rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+)
+s2_dir_host="$exp_dir_host/exp_s2_${timestamp}_${rand_suffix}"
+code_snapshot_host="$s2_dir_host/code"
+mkdir -p "$code_snapshot_host"
+echo "[INFO] Creating stage-2 code snapshot in: $code_snapshot_host"
+
+# Copy a snapshot of the repo at submission/run time.
+# If this fails for any reason, fall back to the live repo.
+repo_dir="$home_path/projects/sam-body4d"
+if rsync -a --delete \
+  --exclude ".git" \
+  --exclude "__pycache__" \
+  --exclude "*.pyc" \
+  --exclude "outputs" \
+  "$repo_dir/" \
+  "$code_snapshot_host/" ; then
+  project_folder="$(host_to_container_path "$code_snapshot_host")"
 else
-  echo "[WARN] No code snapshot found at $exp_dir_host/code; running from live repo in home."
-  project_folder=$bind_home_path/projects/sam-body4d
+  echo "[WARN] Failed to create stage-2 code snapshot; running from live repo in home."
+  project_folder="$bind_home_path/projects/sam-body4d"
 fi
 
 echo "[INFO] EXP_DIR(host)=$exp_dir_host"
+echo "[INFO] s2_dir_host=$s2_dir_host"
 echo "[INFO] project_folder=$project_folder"
 echo "[INFO] input_dir_container=$input_dir_container"
 
