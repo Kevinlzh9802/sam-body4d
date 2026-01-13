@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -110,11 +111,22 @@ def main() -> None:
     # This preserves original pipeline defaults (env var unset).
     os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
 
-    # Camera intrinsics are loaded from a fixed location relative to the input dir.
-    # Example: <input>/../../inputs/camera_intrinsics/intrinsic_4.json
-    camera_intrinsics_path = os.path.normpath(
-        os.path.join(input_dir, "..", "..", "inputs", "camera_intrinsics", "intrinsic_4.json")
-    )
+    # Camera intrinsics are loaded by mapping:
+    #   <...>/outputs/<...>  ->  <...>/inputs/camera_intrinsics/intrinsic_4.json
+    #
+    # i.e. we locate the "outputs" directory level inside input_dir and replace the
+    # remainder with the fixed intrinsics path under "inputs".
+    p = Path(os.path.normpath(input_dir))
+    parts = list(p.parts)
+    out_idx = None
+    for i, part in enumerate(parts):
+        if part in {"outputs", "output"}:
+            out_idx = i
+            break
+    if out_idx is None:
+        raise FileNotFoundError(f'Cannot derive camera intrinsics path')
+    dataset_root = Path(*parts[:out_idx])
+    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_intrinsics" / "intrinsic_4.json")
     K, dist = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
     cam_int = (torch.from_numpy(K).to(device), torch.from_numpy(dist).to(device))
 
