@@ -126,7 +126,7 @@ def main() -> None:
     if out_idx is None:
         raise FileNotFoundError(f'Cannot derive camera intrinsics path')
     dataset_root = Path(*parts[:out_idx])
-    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_intrinsics" / "intrinsic_4.json")
+    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
     K, dist = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
     cam_int = (torch.from_numpy(K).to(device), torch.from_numpy(dist).to(device))
 
