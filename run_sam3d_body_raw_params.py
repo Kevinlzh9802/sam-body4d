@@ -124,7 +124,7 @@ def main() -> None:
     # SAM-3D-Body expects batched intrinsics: shape [B, 3, 3] (not [3, 3]).
     # We use a single K shared across frames, so B=1 here; the estimator will
     # concat per-frame batches into [num_frames, 3, 3] internally.
-    cam_int = torch.from_numpy(K).to(device)
+    cam_int = torch.from_numpy(K).to(device).unsqueeze(0)
 
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
