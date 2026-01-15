@@ -127,8 +127,8 @@ def main() -> None:
         raise FileNotFoundError(f'Cannot derive camera intrinsics path')
     dataset_root = Path(*parts[:out_idx])
     camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
-    K, dist = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
-    cam_int = (torch.from_numpy(K).to(device), torch.from_numpy(dist).to(device))
+    K, _ = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
+    cam_int = torch.from_numpy(K).to(device)
 
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
