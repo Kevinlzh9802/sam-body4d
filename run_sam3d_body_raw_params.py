@@ -27,6 +27,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 from PIL import Image
+from utils.proj_utils import read_camera_intrinsics
 
 # Ensure sam_3d_body package importable when running from repo root
 import sys
@@ -49,14 +50,6 @@ def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
         ],
         dtype=np.float32,
     )
-
-
-def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarray, np.ndarray]:
-    with open(intrinsic_file, "r", encoding="utf-8") as f:
-        intrinsic_data = json.load(f)
-    K = np.array(intrinsic_data["intrinsic"], dtype=np.float32)
-    dist_coeffs = np.array(intrinsic_data.get("distortion_coefficients", []), dtype=np.float32)
-    return adjust_K(K, scale=scale), dist_coeffs
 
 
 def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
@@ -128,6 +121,9 @@ def main() -> None:
     dataset_root = Path(*parts[:out_idx])
     camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
     K, _ = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
+    # SAM-3D-Body expects batched intrinsics: shape [B, 3, 3] (not [3, 3]).
+    # We use a single K shared across frames, so B=1 here; the estimator will
+    # concat per-frame batches into [num_frames, 3, 3] internally.
     cam_int = torch.from_numpy(K).to(device)
 
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]

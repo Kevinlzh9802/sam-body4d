@@ -9,6 +9,22 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+import json
+
+def read_camera_intrinsics(intrinsic_file: str, scale):
+    with open(intrinsic_file, "r") as f:
+        intrinsic_data = json.load(f)
+        K = np.array(intrinsic_data["intrinsic"])
+        dist_coeffs = np.array(intrinsic_data["distortion_coefficients"])
+        # Scale K to match 0.5x resolution images fed to SAM3D
+        K = adjust_K(K, scale=scale)
+    return K, dist_coeffs
+
+def adjust_K(K, scale):
+    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
+             [0,           K[1,1]*scale, K[1,2]*scale],
+             [0,           0,         1]])
+    return K_resized
 
 
 def _to_jsonable(x: Any) -> Any:
