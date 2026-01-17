@@ -1,0 +1,115 @@
+import cv2
+import numpy as np
+import os
+from utils import read_camera_intrinsics_new
+
+
+def undistort_img(img: np.ndarray, intrinsic_path: str, scale: float = 1.0, use_fisheye: bool = False) -> np.ndarray:
+    """
+    Undistort a single image using camera intrinsics.
+    
+    Args:
+        img: Input image as numpy array
+        intrinsic_path: Path to camera intrinsics JSON file
+        scale: Scale factor applied to the image (default: 1.0 for original size)
+               If the image is rescaled from original calibration size,
+               adjust K accordingly (e.g., 0.5 for half size)
+        use_fisheye: Whether to use fisheye distortion model (default: False)
+    
+    Returns:
+        Undistorted image as numpy array
+    """
+    K, dist = read_camera_intrinsics_new(intrinsic_path)
+    
+    # Adjust intrinsics for rescaled images
+    # When image is scaled, focal length and principal point must be scaled too
+    if scale != 1.0:
+        K_scaled = K.copy()
+        K_scaled[0, 0] *= scale  # fx
+        K_scaled[1, 1] *= scale  # fy
+        K_scaled[0, 2] *= scale  # cx
+        K_scaled[1, 2] *= scale  # cy
+    else:
+        K_scaled = K
+    
+    # Distortion coefficients remain the same regardless of scale
+    if use_fisheye:
+        undistorted_img = cv2.undistort(img, K_scaled, dist, Knew=K_scaled)
+    else:
+        undistorted_img = cv2.undistort(img, K_scaled, dist)
+    
+    return undistorted_img
+
+
+def undistort_and_save_video(
+    video_path: str,
+    intrinsic_path: str,
+    output_path: str,
+    scale: float = 1.0,
+    codec: str = 'mp4v',
+    use_fisheye: bool = False,
+) -> bool:
+    """
+    Undistort a video and save it to a new file.
+    
+    Args:
+        video_path: Path to input video file
+        intrinsic_path: Path to camera intrinsics JSON file
+        output_path: Path where the undistorted video will be saved
+        scale: Scale factor for adjusting intrinsics if video is rescaled (default: 1.0)
+        codec: FourCC codec code (default: 'mp4v')
+        use_fisheye: Whether to use fisheye distortion model (default: False)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    
+    # Open input video
+    cap = cv2.VideoCapture(video_path)
+    
+    # Get video properties
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+
+    print(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
+    
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialize video writer
+    fourcc = cv2.VideoWriter_fourcc(*codec)
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    # Process each frame
+    frame_count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        undistorted_frame = undistort_img(frame, intrinsic_path, scale, use_fisheye)
+        out.write(undistorted_frame)
+        frame_count += 1
+        
+    cap.release()
+    out.release()
+    return True
+
+
+if __name__ == "__main__":
+    # Example usage of undistort_and_save_video
+    video_path = ".\\experiments\\vid2-seg8-scaled-denoised.mp4"
+    intrinsic_path = "D:\\exp\\intrinsics\\parameters-camera-04.json"
+    output_path = ".\\experiments\\vid2-seg8-scaled-denoised-undistorted.mp4"
+    
+    # Undistort and save video
+    undistort_and_save_video(video_path, intrinsic_path, output_path, scale=0.5, use_fisheye=True)
+    
+    # Alternative: use generator function for frame-by-frame processing
+    # for frame in undistort_video(video_path, intrinsic_path):
+    #     # Process each undistorted frame
+    #     pass
