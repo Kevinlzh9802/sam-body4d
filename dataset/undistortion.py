@@ -1,8 +1,13 @@
 import cv2
 import numpy as np
 import os
-from utils import read_camera_intrinsics_new
+from data_utils import read_camera_intrinsics_new
 
+def adjust_K(K, scale):
+    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
+             [0,           K[1,1]*scale, K[1,2]*scale],
+             [0,           0,         1]])
+    return K_resized
 
 def undistort_img(img: np.ndarray, intrinsic_path: str, scale: float = 1.0, use_fisheye: bool = False) -> np.ndarray:
     """
