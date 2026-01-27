@@ -19,6 +19,7 @@ from tqdm import tqdm
 from omegaconf import OmegaConf
 import pickle
 import json
+from dataset.undistortion import read_camera_intrinsics_new
 # from tools.load_bbox_kp import load_bbox_kp
 
 # Add model paths
@@ -586,7 +587,7 @@ Examples:
     print("[INFO] Adding bounding box prompts...")
     
     # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
-    bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined", "428")
+    bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined_undistorted", "428")
     # Don't use 0 for object id as it is reserved for background in mask PNGs.
     # Use stable non-zero IDs (e.g. 1000+) for tracking, but keep bbox indexing 0..N-1.
     selected_boxes = list(range(len(bboxes_kps_data[0]['bboxes'])))
@@ -656,8 +657,8 @@ Examples:
 
     # Read video info
     cam_num = video_path.split("/")[-1].split(".")[0].split("_")[0][-1]
-    cam_int = read_camera_intrinsics(f"/mnt/data/sam4d_body/inputs/camera_params/intrinsic_{cam_num}.json", scale=0.5)
-    
+    # cam_int = read_camera_intrinsics(f"/mnt/data/sam4d_body/inputs/camera_params/intrinsic_{cam_num}.json", scale=0.5)
+    cam_int, dist = read_camera_intrinsics_new(f"/mnt/data/sam4d_body/inputs/camera_params_new/parameters-camera-0{cam_num}.json")
     generate_4d(
         output_dir, estimator, out_obj_ids, batch_size, fps,
         pipeline_mask, pipeline_rgb, depth_model,

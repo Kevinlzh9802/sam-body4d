@@ -27,7 +27,7 @@ job_script_masklets=$repo_dir/job_scripts/masklets_test_delftblue.sh
 job_script_meshes=$repo_dir/job_scripts/meshes_test_delftblue.sh
 job_script_raw_params=$repo_dir/job_scripts/raw_params_test_delftblue.sh
 
-video_rel="cam04_cut_10s.mp4"
+video_rel="cam04_cut_10s_undistorted_scaled_s1.mp4"
 mode="masklets" # masklets | raw_params
 exp_dir_override=""
 input_dir=""
