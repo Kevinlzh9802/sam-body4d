@@ -582,10 +582,10 @@ def undistort_videos_folder(
             continue
         cam_id = m.group(1)
         # Only process the requested cameras explicitly.
-        if cam_id not in {"6"}:
-            continue
+        # if cam_id not in {"6"}:
+        #     continue
 
-        intrinsic_json = cam_params_root / intrinsic_json_template.format(cam_id=cam_id)
+        intrinsic_json = cam_params_root / "parameters-camera-04.json"
 
         # Process videos inside this camera folder (non-recursive, per the requested structure).
         for vid_path in sorted([p for p in cam_dir.iterdir() if p.is_file() and p.suffix.lower() in video_exts]):
@@ -781,11 +781,11 @@ def sanity_check_camera_intrinsics_and_distortion(
 
 
 if __name__ == "__main__":
-    camera_path = "/home/zonghuan/tudelft/projects/datasets/conflab/data_processed/cameras/"
+    camera_path = "/home/zonghuan/tudelft/projects/datasets/modification/conflab"
     undistort_videos_folder(
-        input_folder=os.path.join(camera_path, "video_segments_test"),
-        output_folder=os.path.join(camera_path, "video_segments_undistorted_test"),
-        camera_params_folder=os.path.join(camera_path, "camera_params"),
+        input_folder=os.path.join(camera_path, "segments"),
+        output_folder=os.path.join(camera_path, "segments_undistorted"),
+        camera_params_folder="./experiments/intrinsics",
         scale=0.5,
         balance=0,
         overwrite=True,

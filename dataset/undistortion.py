@@ -9,7 +9,14 @@ def adjust_K(K, scale):
              [0,           0,         1]])
     return K_resized
 
-def undistort_img(img: np.ndarray, intrinsic_path: str, scale: float = 1.0, use_fisheye: bool = False) -> np.ndarray:
+def undistort_kps(kps: np.ndarray, K: np.ndarray, dist_coeffs: np.ndarray) -> np.ndarray:
+    """
+    Undistort keypoints using camera parameters.
+    """
+    undistorted_kps = cv2.undistortPoints(kps, K, dist_coeffs)
+    return undistorted_kps
+
+def undistort_img(img: np.ndarray, K: np.ndarray, dist: np.ndarray, scale: float = 1.0, use_fisheye: bool = False) -> np.ndarray:
     """
     Undistort a single image using camera intrinsics.
     
@@ -24,7 +31,6 @@ def undistort_img(img: np.ndarray, intrinsic_path: str, scale: float = 1.0, use_
     Returns:
         Undistorted image as numpy array
     """
-    K, dist = read_camera_intrinsics_new(intrinsic_path)
     
     # Adjust intrinsics for rescaled images
     # When image is scaled, focal length and principal point must be scaled too
@@ -38,10 +44,19 @@ def undistort_img(img: np.ndarray, intrinsic_path: str, scale: float = 1.0, use_
         K_scaled = K
     
     # Distortion coefficients remain the same regardless of scale
+    dim = (1920, 1080)
+    R = np.eye(3)
     if use_fisheye:
-        undistorted_img = cv2.undistort(img, K_scaled, dist, Knew=K_scaled)
+        # Fisheye model requires cv2.fisheye module and specific coefficient shape
+        dist_fish = np.reshape(dist[:4], (4, 1))
+        Knew = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
+            K_scaled, dist_fish, dim, R, balance=1.0, new_size=dim, fov_scale=scale
+        )
+        undistorted_img = cv2.fisheye.undistortImage(img, K_scaled, dist_fish, Knew=Knew)
+        
     else:
-        undistorted_img = cv2.undistort(img, K_scaled, dist)
+        # Standard model uses cv2.undistort with newCameraMatrix
+        undistorted_img = cv2.undistort(img, K_scaled, dist, newCameraMatrix=K_scaled)
     
     return undistorted_img
 
@@ -92,11 +107,12 @@ def undistort_and_save_video(
     
     # Process each frame
     frame_count = 0
+    K, dist = read_camera_intrinsics_new(intrinsic_path)
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        undistorted_frame = undistort_img(frame, intrinsic_path, scale, use_fisheye)
+        undistorted_frame = undistort_img(frame, K, dist, scale, use_fisheye)
         out.write(undistorted_frame)
         frame_count += 1
         
@@ -104,16 +120,33 @@ def undistort_and_save_video(
     out.release()
     return True
 
+def undistort_video_folder(
+    input_folder: str,
+    output_folder: str,
+    intrinsic_path: str,
+    scale: float = 1.0,
+    use_fisheye: bool = False,
+) -> bool:
+    """
+    Undistort a video folder and save it to a new folder.
+    """
+    for video_path in os.listdir(input_folder):
+        undistort_and_save_video(os.path.join(input_folder, video_path), intrinsic_path, os.path.join(output_folder, video_path), scale=scale, use_fisheye=use_fisheye)
+    return True
 
 if __name__ == "__main__":
     # Example usage of undistort_and_save_video
-    video_path = ".\\experiments\\vid2-seg8-scaled-denoised.mp4"
-    intrinsic_path = "D:\\exp\\intrinsics\\parameters-camera-04.json"
-    output_path = ".\\experiments\\vid2-seg8-scaled-denoised-undistorted.mp4"
-    
+    # video_path = ".\\experiments\\vid2-seg8-scaled-denoised.mp4"
+    # intrinsic_path = "D:\\exp\\intrinsics\\parameters-camera-04.json"
+    # output_path = ".\\experiments\\vid2-seg8-scaled-denoised-undistorted.mp4"
+    input_folder = "/home/zonghuan/tudelft/projects/datasets/modification/conflab/segments_test"
+    output_folder = "/home/zonghuan/tudelft/projects/datasets/modification/conflab/segments_undistorted"
+    intrinsic_path = "./experiments/intrinsics/parameters-camera-04.json"
+    scale = 1.0
+    use_fisheye = True
     # Undistort and save video
-    undistort_and_save_video(video_path, intrinsic_path, output_path, scale=0.5, use_fisheye=True)
-    
+    # undistort_and_save_video(video_path, intrinsic_path, output_path, scale=0.5, use_fisheye=True)
+    undistort_video_folder(input_folder, output_folder, intrinsic_path, scale=scale, use_fisheye=use_fisheye)
     # Alternative: use generator function for frame-by-frame processing
     # for frame in undistort_video(video_path, intrinsic_path):
     #     # Process each undistorted frame
