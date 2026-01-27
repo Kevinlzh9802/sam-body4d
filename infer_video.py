@@ -610,7 +610,7 @@ Examples:
     # Explicit mapping for debug/projection utilities (supports discontinuous obj_id values).
     obj_id_to_bbox_idx = {int(pid): int(i) for i, pid in enumerate(pid_list)}
     for bbox_idx in selected_boxes:
-        obj_id = pid_list[bbox_idx]
+        obj_id = int(pid_list[bbox_idx])
         bbox = bboxes_kps_data[0]['bboxes'][bbox_idx]
         rel_box = bbox / [width, height, width, height]
         
