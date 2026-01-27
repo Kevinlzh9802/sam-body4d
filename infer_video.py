@@ -674,6 +674,7 @@ Examples:
     cam_num = video_path.split("/")[-1].split(".")[0].split("_")[0][-1]
     # cam_int = read_camera_intrinsics(f"/mnt/data/sam4d_body/inputs/camera_params/intrinsic_{cam_num}.json", scale=0.5)
     cam_int, dist = read_camera_intrinsics_new(f"/mnt/data/sam4d_body/inputs/camera_params_new/parameters-camera-0{cam_num}.json")
+    cam_int = torch.from_numpy(cam_int).float()
     generate_4d(
         output_dir, estimator, out_obj_ids, batch_size, fps,
         pipeline_mask, pipeline_rgb, depth_model,
