@@ -52,6 +52,21 @@ def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
     )
 
 
+def read_camera_intrinsics_new(intrinsic_file: str):
+    with open(intrinsic_file, "r") as f:
+        intrinsic_data = json.load(f)
+        params = intrinsic_data['Calibration']['cameras'][0]['model']['ptr_wrapper']['data']['parameters']
+
+        f = params['f']['val']
+        cx = params['cx']['val']
+        cy = params['cy']['val']
+        
+        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+        ks = [params[f'k{i}']['val'] for i in range(1, 5)]
+        dist_coeffs = np.array(ks)
+
+    return K, dist_coeffs
+
 def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
     mhr_path = cfg.sam_3d_body.get("mhr_path", "")
     fov_path = cfg.sam_3d_body.get("fov_path", "")
@@ -119,8 +134,11 @@ def main() -> None:
     if out_idx is None:
         raise FileNotFoundError(f'Cannot derive camera intrinsics path')
     dataset_root = Path(*parts[:out_idx])
-    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
-    K, _ = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
+    # camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
+    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params_new" / "parameters-camera-04.json")
+    K, _ = read_camera_intrinsics_new(camera_intrinsics_path)
+    K = adjust_K(K, scale=float(args.camera_scale))
+    # K, _ = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
     # SAM-3D-Body expects batched intrinsics: shape [B, 3, 3] (not [3, 3]).
     # We use a single K shared across frames, so B=1 here; the estimator will
     # concat per-frame batches into [num_frames, 3, 3] internally.
