@@ -80,7 +80,7 @@ def _load_sequence_for_person(
     person_dir: str,
     stride: int = 1,
     max_frames: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+) -> Optional[Tuple[np.ndarray, np.ndarray, List[str]]]:
     ply_files = [
         os.path.join(person_dir, f)
         for f in os.listdir(person_dir)
@@ -88,7 +88,8 @@ def _load_sequence_for_person(
     ]
     ply_files = sorted(ply_files, key=_natural_sort_key)
     if not ply_files:
-        raise ValueError(f"No .ply files found in: {person_dir}")
+        print(f"[WARN] No .ply files found in: {person_dir} — skipping person.")
+        return None
 
     if stride > 1:
         ply_files = ply_files[::stride]
@@ -190,9 +191,13 @@ def view_single_person_centered(
     if not os.path.isdir(person_dir):
         raise FileNotFoundError(f"Person folder not found: {person_dir}")
 
-    verts, faces, used = _load_sequence_for_person(
+    seq = _load_sequence_for_person(
         person_dir, stride=max(1, stride), max_frames=max_frames
     )
+    if seq is None:
+        print(f"[WARN] No meshes to view for person {person_id}.")
+        return
+    verts, faces, used = seq
     verts = _center_vertices_sequence(verts, center_mode=center_mode, center_vertex=center_vertex)
 
     from aitviewer.renderables.meshes import Meshes  # type: ignore
@@ -248,9 +253,12 @@ def meshes_4d() -> None:
         if not os.path.isdir(pdir):
             print(f"[WARN] Skipping missing folder: {pdir}")
             continue
-        verts, faces, used = _load_sequence_for_person(
+        seq = _load_sequence_for_person(
             pdir, stride=max(1, args.stride), max_frames=args.max_frames
         )
+        if seq is None:
+            continue
+        verts, faces, used = seq
         vertices_by_id[str(pid)] = verts
         faces_by_id[str(pid)] = faces
         print(f"[OK] ID {pid}: {verts.shape[0]} frames, {verts.shape[1]} verts, {faces.shape[0]} faces")
@@ -357,7 +365,7 @@ def meshes_4d_single_person() -> None:
 
 
 if __name__ == "__main__":
-    # meshes_4d()
-    meshes_4d_single_person()
+    meshes_4d()
+    # meshes_4d_single_person()
 
 
