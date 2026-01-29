@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -25,11 +25,11 @@ class Stage3Config:
     bbox_kps_pkl: Optional[str] = None
     camera_intrinsics_json: Optional[str] = None
     camera_scale: float = 0.5
-    reproj_cfg: ReprojOptConfig = ReprojOptConfig()
+    reproj_cfg: ReprojOptConfig = field(default_factory=ReprojOptConfig)
 
     # Ground inputs
     extrinsics_json: Optional[str] = None
-    ground_cfg: GroundOptConfig = GroundOptConfig()
+    ground_cfg: GroundOptConfig = field(default_factory=GroundOptConfig)
 
 
 def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarray, np.ndarray]:
