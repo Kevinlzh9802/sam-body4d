@@ -167,7 +167,7 @@ def main() -> None:
     if face is None:
         face = torch.zeros((T * N, 72), dtype=torch.float32, device=device)
 
-    verts, j3d, _jcoords, _mhr_params, _joint_rots = head_pose.mhr_forward(
+    mhr_out = head_pose.mhr_forward(
         global_trans=global_rot * 0,
         global_rot=global_rot,
         body_pose_params=body_pose,
@@ -180,6 +180,12 @@ def main() -> None:
         return_model_params=False,
         return_joint_rotations=False,
     )
+    # mhr_forward signature can vary across checkpoints/versions.
+    # Expect at least (verts, j3d); ignore any extra returns.
+    if isinstance(mhr_out, (tuple, list)) and len(mhr_out) >= 2:
+        verts, j3d = mhr_out[0], mhr_out[1]
+    else:
+        raise ValueError(f"Unexpected mhr_forward output: {type(mhr_out)}")
     # Camera system difference (match existing pipeline)
     verts[..., [1, 2]] *= -1
     j3d[..., [1, 2]] *= -1
