@@ -108,6 +108,14 @@ def main() -> None:
     parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
     args = parser.parse_args()
 
+    out_dir = args.out or os.path.dirname(args.raw)
+    os.makedirs(out_dir, exist_ok=True)
+    # Log run options for reproducibility
+    opts_path = os.path.join(out_dir, "stage3_run_options.txt")
+    with open(opts_path, "w", encoding="utf-8") as f:
+        for k, v in vars(args).items():
+            f.write(f"{k}: {v}\n")
+
     payload = load_raw_mhr(args.raw, map_location="cpu")
     frames = payload.get("frames", None)
     if frames is None:
@@ -235,13 +243,12 @@ def main() -> None:
 
         # Apply updated pred_cam_t to verts for export (do not change verts topology)
         pred_cam_t = mhr["pred_cam_t"]
-        out_dir = args.out or os.path.join(os.path.dirname(args.raw), "smoothed_export")
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = args.out or os.path.dirname(args.raw)
         with open(os.path.join(out_dir, "stage3_opt_summary.json"), "w", encoding="utf-8") as f:
             json.dump(opt_summary, f, indent=2)
 
-    out_dir = args.out or os.path.join(os.path.dirname(args.raw), "smoothed_export")
-    mesh_dir = os.path.join(out_dir, "mesh_4d_individual")
+    out_dir = args.out or os.path.dirname(args.raw)
+    mesh_dir = os.path.join(out_dir, "meshes_4d_individual")
     os.makedirs(mesh_dir, exist_ok=True)
 
     # Export per frame/per obj_id (only when present)

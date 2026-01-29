@@ -72,8 +72,8 @@ echo "[INFO] exp_dir_host=$exp_dir_host"
 echo "[INFO] exp_dir_container=$exp_dir_container"
 echo "[INFO] raw_path_container=$raw_path_container"
 
-# Default output dir: <EXP_DIR>/mesh_4d_individual (change via OUT_DIR env)
-out_dir_container="${OUT_DIR:-$exp_dir_container/mesh_4d_individual}"
+# Default output dir: <EXP_DIR> (meshes_4d_individual will be created inside)
+out_dir_container="${OUT_DIR:-$exp_dir_container}"
 
 apptainer exec --nv \
   --bind $model_path:$bind_model_path \
