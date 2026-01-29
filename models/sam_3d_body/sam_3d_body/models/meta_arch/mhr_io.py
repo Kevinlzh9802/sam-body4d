@@ -30,8 +30,12 @@ def save_raw_mhr(path: str, payload: Dict[str, Any]) -> None:
 def load_raw_mhr(path: str, map_location: Optional[str] = "cpu") -> Dict[str, Any]:
     """
     Load raw MHR payload saved by save_raw_mhr().
+
+    Note: PyTorch 2.6+ defaults `weights_only=True` in torch.load, which breaks
+    loading arbitrary dict payloads that contain numpy objects. We explicitly
+    set weights_only=False here to preserve the previous behavior.
     """
-    return torch.load(path, map_location=map_location)
+    return torch.load(path, map_location=map_location, weights_only=False)
 
 
 def is_raw_mhr_payload(d: Dict[str, Any]) -> bool:
