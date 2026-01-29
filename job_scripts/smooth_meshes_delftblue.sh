@@ -43,7 +43,14 @@ usage() {
 }
 
 # EXP_DIR: stage1/2 parent folder (expects masklets/raw_mhr.pt under it).
-exp_dir_host="${1:-${EXP_DIR:-}}"
+exp_dir_host="${EXP_DIR:-}"
+# EXP_S3_DIR: stage3 snapshot folder where outputs should be written.
+exp_s3_dir_host="${1:-${EXP_S3_DIR:-}}"
+if [ -z "${exp_s3_dir_host:-}" ]; then
+  echo "[ERROR] Missing EXP_S3_DIR (stage3 snapshot folder)." >&2
+  usage
+  exit 2
+fi
 if [ -z "${exp_dir_host:-}" ]; then
   echo "[ERROR] Missing EXP_DIR (stage1/2 parent folder)." >&2
   usage
@@ -51,6 +58,7 @@ if [ -z "${exp_dir_host:-}" ]; then
 fi
 
 exp_dir_container="$(host_to_container_path "$exp_dir_host")"
+exp_s3_dir_container="$(host_to_container_path "$exp_s3_dir_host")"
 raw_path_container="$exp_dir_container/masklets/raw_mhr.pt"
 
 # Optional: use a dedicated code snapshot if provided, otherwise live repo in home.
@@ -70,10 +78,12 @@ fi
 echo "[INFO] project_folder=$project_folder"
 echo "[INFO] exp_dir_host=$exp_dir_host"
 echo "[INFO] exp_dir_container=$exp_dir_container"
+echo "[INFO] exp_s3_dir_host=$exp_s3_dir_host"
+echo "[INFO] exp_s3_dir_container=$exp_s3_dir_container"
 echo "[INFO] raw_path_container=$raw_path_container"
 
-# Default output dir: <EXP_DIR> (meshes_4d_individual will be created inside)
-out_dir_container="${OUT_DIR:-$exp_dir_container}"
+# Default output dir: <EXP_S3_DIR> (meshes_4d_individual will be created inside)
+out_dir_container="${OUT_DIR:-$exp_s3_dir_container}"
 
 apptainer exec --nv \
   --bind $model_path:$bind_model_path \

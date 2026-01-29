@@ -211,8 +211,9 @@ PY
     fi
 
     echo "[INFO] EXP_DIR: $exp_dir"
-    sbatch --export=ALL,EXP_DIR=$exp_dir,S3_CODE_DIR_HOST=$s3_code_dir_host,USE_LIVE_CODE=$use_live_code \
-      "$job_script_smooth" "$exp_dir"
+    echo "[INFO] EXP_S3_DIR: $s3_dir_host"
+    sbatch --export=ALL,EXP_DIR=$exp_dir,EXP_S3_DIR=$s3_dir_host,S3_CODE_DIR_HOST=$s3_code_dir_host,USE_LIVE_CODE=$use_live_code \
+      "$job_script_smooth" "$s3_dir_host"
     ;;
   *)
     echo "[ERROR] Unknown --mode: $mode (expected: masklets|raw_params)" >&2
