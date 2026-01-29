@@ -38,14 +38,15 @@ def _to_jsonable(x: Any) -> Any:
     if x is None:
         return None
     try:
-        import torch  # type: ignore
-
+        import torch
         if isinstance(x, torch.Tensor):
             return x.detach().float().cpu().numpy().tolist()
     except Exception:
         pass
     if isinstance(x, np.ndarray):
         return x.astype(np.float32).tolist()
+    if isinstance(x, np.generic):
+        return x.item()
     try:
         return list(x)
     except Exception:
