@@ -11,6 +11,7 @@ set -euo pipefail
 # Usage (run on login node):
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode masklets --video cam04_cut_10s.mp4
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode raw_params --input /scratch/.../outputs/exp_XXXX
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../outputs/exp_XXXX
 #
 # You can still edit your repo after submission; the job will run the frozen snapshot.
 
@@ -26,9 +27,10 @@ repo_dir=$home_path/projects/sam-body4d
 job_script_masklets=$repo_dir/job_scripts/masklets_test_delftblue.sh
 job_script_meshes=$repo_dir/job_scripts/meshes_test_delftblue.sh
 job_script_raw_params=$repo_dir/job_scripts/raw_params_test_delftblue.sh
+job_script_smooth=$repo_dir/job_scripts/smooth_meshes_delftblue.sh
 
-video_rel="cam04_cut_10s_undistorted_scaled_s1.mp4"
-mode="masklets" # masklets | raw_params
+video_rel="cam04_cut_10s.mp4"
+mode="masklets" # masklets | raw_params | smooth
 exp_dir_override=""
 input_dir=""
 stage1_dir_host=""
@@ -78,6 +80,22 @@ if [ "$mode" = "raw_params" ]; then
   stage1_dir_host="$input_dir/masklets"
 
   # If the user didn't explicitly set --exp-dir, use the one derived from --input.
+  if [ -z "${exp_dir_override:-}" ]; then
+    exp_dir_override="$exp_dir_from_input"
+  fi
+fi
+
+if [ "$mode" = "smooth" ]; then
+  # For smoothing, the user provides the experiment folder (.../exp_XXXX) only.
+  if [ -z "${input_dir:-}" ]; then
+    echo "[ERROR] --mode smooth requires --input <exp_dir_host> (e.g. .../exp_XXXX)" >&2
+    exit 2
+  fi
+  if [ "$(basename "$input_dir")" = "masklets" ]; then
+    echo "[ERROR] --input must be the experiment folder (e.g. .../exp_XXXX), not .../exp_XXXX/masklets" >&2
+    exit 2
+  fi
+  exp_dir_from_input="$input_dir"
   if [ -z "${exp_dir_override:-}" ]; then
     exp_dir_override="$exp_dir_from_input"
   fi
@@ -158,6 +176,43 @@ PY
     echo "[INFO] EXP_S2_DIR: $s2_dir_host"
     sbatch --export=ALL,EXP_DIR=$exp_dir,S2_CODE_DIR_HOST=$s2_code_dir_host,USE_LIVE_CODE=$use_live_code \
       "$job_script_raw_params" "$stage1_dir_host"
+    ;;
+  smooth)
+    # Stage 3: smooth raw params and export meshes.
+    # IMPORTANT: create exp_s3_*/code snapshot AT SUBMISSION TIME (not at job start).
+    if [ -z "${exp_dir_override:-}" ]; then
+      echo "[ERROR] Internal error: exp_dir not set for smooth mode." >&2
+      exit 2
+    fi
+
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    rand_suffix=$(python3 - <<'PY'
+import random, string
+print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
+PY
+    )
+    s3_dir_host="$exp_dir/exp_s3_${timestamp}_${rand_suffix}"
+    s3_code_dir_host="$s3_dir_host/code"
+    mkdir -p "$s3_code_dir_host"
+    echo "[INFO] Creating stage-3 snapshot in: $s3_code_dir_host"
+
+    if rsync -a --delete \
+      --exclude ".git" \
+      --exclude "__pycache__" \
+      --exclude "*.pyc" \
+      --exclude "outputs" \
+      "$repo_dir/" \
+      "$s3_code_dir_host/" ; then
+      use_live_code="0"
+    else
+      echo "[WARN] Failed to snapshot stage-3 code at submission; job will use live repo at runtime." >&2
+      use_live_code="1"
+      s3_code_dir_host=""
+    fi
+
+    echo "[INFO] EXP_DIR: $exp_dir"
+    sbatch --export=ALL,EXP_DIR=$exp_dir,S3_CODE_DIR_HOST=$s3_code_dir_host,USE_LIVE_CODE=$use_live_code \
+      "$job_script_smooth" "$exp_dir"
     ;;
   *)
     echo "[ERROR] Unknown --mode: $mode (expected: masklets|raw_params)" >&2
