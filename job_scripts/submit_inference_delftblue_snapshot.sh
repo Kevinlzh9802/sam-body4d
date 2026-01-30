@@ -29,7 +29,7 @@ job_script_meshes=$repo_dir/job_scripts/meshes_test_delftblue.sh
 job_script_raw_params=$repo_dir/job_scripts/raw_params_test_delftblue.sh
 job_script_smooth=$repo_dir/job_scripts/smooth_meshes_delftblue.sh
 
-video_rel="cam04_cut_10s.mp4"
+video_rel="cam04_cut_20s.mp4"
 mode="masklets" # masklets | raw_params | smooth
 exp_dir_override=""
 input_dir=""
