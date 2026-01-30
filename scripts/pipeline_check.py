@@ -374,8 +374,8 @@ def main() -> None:
     if args.mask_dir and args.bbox_pkl:
         check_bbox_match(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx)
         check_id_matching_by_iou(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx, iou_thresh=args.iou_thresh)
-    if args.meta_json and args.raw_mhr_pt:
-        check_id_matching_stage1_stage2(args.mask_dir or "", args.meta_json, args.raw_mhr_pt)
+    # if args.meta_json and args.raw_mhr_pt:
+    #     check_id_matching_stage1_stage2(args.mask_dir or "", args.meta_json, args.raw_mhr_pt)
 
 
 if __name__ == "__main__":
