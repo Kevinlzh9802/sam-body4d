@@ -193,6 +193,19 @@ def check_bbox_match(mask_dir: str, bbox_pkl: str, frame_idx: int = 0) -> Dict[s
     for oid in common_ids:
         iou = _bbox_iou(prompt_by_id[oid], mask_bboxes[oid])
         rows.append((oid, iou))
+    # plot the bboxes and masks on image
+    img = cv2.imread("./experiments/00000000.jpg")
+    for oid in common_ids:
+        bbox = prompt_by_id[oid]
+        cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 0, 255), 2)
+        cv2.putText(img, str(oid), (int(bbox[0]), int(bbox[1])+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        bbox = mask_bboxes[oid]
+        cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
+        cv2.putText(img, str(oid), (int(bbox[0]), int(bbox[1])+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.imshow("bbox and mask", img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()    
 
     summary = {
         "mask_dir": mask_dir,
@@ -222,6 +235,128 @@ def check_bbox_match(mask_dir: str, bbox_pkl: str, frame_idx: int = 0) -> Dict[s
     return summary
 
 
+def check_id_matching_stage1_stage2(
+    mask_dir: str,
+    meta_json: str,
+    raw_mhr_pt: str,
+) -> Dict[str, Any]:
+    """
+    Compare IDs across stage1 (masklets_meta.json) and stage2 (raw_mhr.pt).
+    """
+    if not os.path.exists(meta_json):
+        raise FileNotFoundError(f"Missing meta_json: {meta_json}")
+    if not os.path.exists(raw_mhr_pt):
+        raise FileNotFoundError(f"Missing raw_mhr_pt: {raw_mhr_pt}")
+
+    with open(meta_json, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    stage1_ids = {int(x) for x in meta.get("out_obj_ids", [])}
+
+    payload = torch.load(raw_mhr_pt, map_location="cpu", weights_only=False)
+    frames = payload.get("frames", [])
+    stage2_ids: Set[int] = set()
+    for fr in frames:
+        for oid in fr.get("obj_ids", []):
+            stage2_ids.add(int(oid))
+
+    missing_in_stage2 = sorted(stage1_ids - stage2_ids)
+    extra_in_stage2 = sorted(stage2_ids - stage1_ids)
+
+    summary = {
+        "stage1_ids": sorted(stage1_ids),
+        "stage2_ids": sorted(stage2_ids),
+        "missing_in_stage2": missing_in_stage2,
+        "extra_in_stage2": extra_in_stage2,
+    }
+
+    print("[STAGE1 vs STAGE2 ID CHECK]")
+    print(f"  stage1_ids: {len(stage1_ids)}")
+    print(f"  stage2_ids: {len(stage2_ids)}")
+    if missing_in_stage2:
+        print(f"  missing_in_stage2: {missing_in_stage2}")
+    else:
+        print("  missing_in_stage2: []")
+    if extra_in_stage2:
+        print(f"  extra_in_stage2: {extra_in_stage2}")
+    else:
+        print("  extra_in_stage2: []")
+
+    return summary
+
+
+def check_id_matching_by_iou(
+    mask_dir: str,
+    bbox_pkl: str,
+    frame_idx: int = 0,
+    iou_thresh: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    Build an ID mapping between prompt bboxes and mask-derived bboxes using IoU matching.
+    Useful when IDs exist but ordering differs.
+    """
+    if not os.path.isdir(mask_dir):
+        raise FileNotFoundError(f"Missing mask_dir: {mask_dir}")
+    if not os.path.exists(bbox_pkl):
+        raise FileNotFoundError(f"Missing bbox_pkl: {bbox_pkl}")
+
+    with open(bbox_pkl, "rb") as f:
+        data = pickle.load(f)
+    rec = data[frame_idx]
+    prompt_bboxes = np.asarray(rec["bboxes"], dtype=np.float32)
+    prompt_pids = np.asarray(rec["pids"], dtype=np.int32)
+
+    mask_paths = sorted(glob.glob(os.path.join(mask_dir, "*.png")))
+    if not mask_paths:
+        raise FileNotFoundError(f"No .png masks found in: {mask_dir}")
+    if frame_idx < 0 or frame_idx >= len(mask_paths):
+        raise IndexError(f"frame_idx {frame_idx} out of range (0..{len(mask_paths)-1})")
+    mask = np.array(Image.open(mask_paths[frame_idx]).convert("P"))
+
+    mask_bboxes: Dict[int, np.ndarray] = {}
+    for obj_id in np.unique(mask):
+        if obj_id == 0:
+            continue
+        obj_id = int(obj_id)
+        mask_binary = (mask == obj_id).astype(np.uint8) * 255
+        coords = cv2.findNonZero(mask_binary)
+        if coords is None:
+            continue
+        x, y, w, h = cv2.boundingRect(coords)
+        mask_bboxes[obj_id] = np.array([x, y, x + w, y + h], dtype=np.float32)
+
+    # IoU matching: for each prompt id, find best mask id
+    matches: List[Tuple[int, int, float]] = []
+    for i, pid in enumerate(prompt_pids):
+        best_id = None
+        best_iou = -1.0
+        for mid, mb in mask_bboxes.items():
+            iou = _bbox_iou(prompt_bboxes[i], mb)
+            if iou > best_iou:
+                best_iou = iou
+                best_id = mid
+        matches.append((int(pid), int(best_id) if best_id is not None else -1, float(best_iou)))
+
+    low_iou = [m for m in matches if m[2] < iou_thresh]
+    summary = {
+        "frame_idx": frame_idx,
+        "num_prompt_ids": len(prompt_pids),
+        "num_mask_ids": len(mask_bboxes),
+        "matches": matches,
+        "low_iou": low_iou,
+    }
+
+    print("[IOU ID MATCH CHECK]")
+    print(f"  frame_idx: {frame_idx}")
+    print(f"  prompt_ids: {len(prompt_pids)}")
+    print(f"  mask_ids: {len(mask_bboxes)}")
+    if low_iou:
+        print(f"  matches below iou<{iou_thresh}: {low_iou[:10]}")
+    else:
+        print("  all matches above threshold")
+
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sanity check a raw MHR .pt file")
     # parser.add_argument("--mhr-pt", help="Path to raw MHR .pt (e.g., raw_mhr.pt)")
@@ -229,6 +364,8 @@ def main() -> None:
     parser.add_argument("--meta-json", default=None, help="Path to masklets_meta.json")
     parser.add_argument("--bbox-pkl", default=None, help="Path to bbox/kps pkl used for prompting")
     parser.add_argument("--frame-idx", type=int, default=0, help="Frame index for bbox comparison")
+    parser.add_argument("--raw-mhr-pt", default=None, help="Path to raw_mhr.pt for stage1 vs stage2 id check")
+    parser.add_argument("--iou-thresh", type=float, default=0.5, help="IoU threshold for ID matching")
     args = parser.parse_args()
 
     # check_mhr(args.mhr_pt)
@@ -236,6 +373,9 @@ def main() -> None:
         check_mask_ids(args.mask_dir, args.meta_json)
     if args.mask_dir and args.bbox_pkl:
         check_bbox_match(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx)
+        check_id_matching_by_iou(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx, iou_thresh=args.iou_thresh)
+    if args.meta_json and args.raw_mhr_pt:
+        check_id_matching_stage1_stage2(args.mask_dir or "", args.meta_json, args.raw_mhr_pt)
 
 
 if __name__ == "__main__":
