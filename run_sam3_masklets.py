@@ -102,7 +102,7 @@ def save_masklets(
     video_segments = {}
     for (
         frame_idx,
-        _obj_ids,
+        obj_ids,
         _low_res_masks,
         video_res_masks,
         _obj_scores,
@@ -116,7 +116,7 @@ def save_masklets(
     ):
         video_segments[int(frame_idx)] = {
             out_obj_id: (video_res_masks[i] > 0.0).cpu().float().numpy()
-            for i, out_obj_id in enumerate(_obj_ids)
+            for i, out_obj_id in enumerate(obj_ids)
         }
 
     out_h = inference_state["video_height"]
