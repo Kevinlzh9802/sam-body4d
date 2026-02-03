@@ -359,23 +359,22 @@ def check_id_matching_by_iou(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sanity check a raw MHR .pt file")
-    # parser.add_argument("--mhr-pt", help="Path to raw MHR .pt (e.g., raw_mhr.pt)")
+    parser.add_argument("--mhr-pt", help="Path to raw MHR .pt (e.g., raw_mhr.pt)")
     parser.add_argument("--mask-dir", default=None, help="Path to masks/ folder (PNG masks)")
     parser.add_argument("--meta-json", default=None, help="Path to masklets_meta.json")
     parser.add_argument("--bbox-pkl", default=None, help="Path to bbox/kps pkl used for prompting")
     parser.add_argument("--frame-idx", type=int, default=0, help="Frame index for bbox comparison")
-    parser.add_argument("--raw-mhr-pt", default=None, help="Path to raw_mhr.pt for stage1 vs stage2 id check")
     parser.add_argument("--iou-thresh", type=float, default=0.5, help="IoU threshold for ID matching")
     args = parser.parse_args()
 
-    # check_mhr(args.mhr_pt)
-    if args.mask_dir and args.meta_json:
-        check_mask_ids(args.mask_dir, args.meta_json)
-    if args.mask_dir and args.bbox_pkl:
-        check_bbox_match(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx)
-        check_id_matching_by_iou(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx, iou_thresh=args.iou_thresh)
-    # if args.meta_json and args.raw_mhr_pt:
-    #     check_id_matching_stage1_stage2(args.mask_dir or "", args.meta_json, args.raw_mhr_pt)
+    check_mhr(args.mhr_pt)
+    # if args.mask_dir and args.meta_json:
+    #     check_mask_ids(args.mask_dir, args.meta_json)
+    # if args.mask_dir and args.bbox_pkl:
+    #     check_bbox_match(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx)
+    #     check_id_matching_by_iou(args.mask_dir, args.bbox_pkl, frame_idx=args.frame_idx, iou_thresh=args.iou_thresh)
+    if args.meta_json and args.mhr_pt:
+        check_id_matching_stage1_stage2(args.mask_dir or "", args.meta_json, args.mhr_pt)
 
 
 if __name__ == "__main__":

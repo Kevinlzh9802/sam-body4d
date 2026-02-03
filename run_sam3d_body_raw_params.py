@@ -164,6 +164,11 @@ def main() -> None:
     # For minimal risk, we dump the per-frame per-person params as a list of frames.
     frames: List[Dict[str, Any]] = []
 
+    # DEBUG: Track all IDs seen from masks vs IDs in final output
+    all_mask_ids: set = set()
+    all_output_ids: set = set()
+    id_mismatch_frames: List[Dict[str, Any]] = []
+
     for start in range(0, n, int(args.batch_size)):
         end = min(n, start + int(args.batch_size))
         batch_images = images_list[start:end]
@@ -180,6 +185,17 @@ def main() -> None:
             cam_int,
         )
 
+        # DEBUG: Log batch-level info
+        batch_mask_ids = set()
+        for ids_in_frame in id_batch:
+            if ids_in_frame:
+                batch_mask_ids.update(ids_in_frame)
+                all_mask_ids.update(ids_in_frame)
+        if start == 0:
+            print(f"[DEBUG] First batch: id_batch has {len(id_batch)} frames, "
+                  f"outputs has {len(outputs)} frames, empty_frame_list={empty_frame_list}")
+            print(f"[DEBUG] First batch mask IDs: {sorted(batch_mask_ids)}")
+
         num_empty = 0
         for bi in range(len(batch_images)):
             frame_name = os.path.basename(batch_images[bi])[:-4]
@@ -190,6 +206,20 @@ def main() -> None:
 
             out_list = outputs[bi - num_empty]
             ids = id_batch[bi - num_empty]
+            
+            # DEBUG: Check for mismatch between model outputs and mask IDs
+            if ids is not None and len(out_list) != len(ids):
+                mismatch_info = {
+                    "frame": frame_name,
+                    "mask_ids": list(ids) if ids else [],
+                    "num_model_outputs": len(out_list),
+                    "num_mask_ids": len(ids) if ids else 0,
+                }
+                id_mismatch_frames.append(mismatch_info)
+                if len(id_mismatch_frames) <= 5:  # Log first 5 mismatches
+                    print(f"[DEBUG] ID MISMATCH in {frame_name}: "
+                          f"mask has {len(ids)} IDs {ids}, model output has {len(out_list)} people")
+            
             people = []
             obj_ids = []
             for pid, person in enumerate(out_list):
@@ -215,6 +245,24 @@ def main() -> None:
                 )
 
             frames.append({"frame": frame_name, "people": people, "obj_ids": obj_ids})
+            all_output_ids.update(obj_ids)
+
+    # DEBUG: Print summary of ID tracking
+    print(f"\n[DEBUG] === ID TRACKING SUMMARY ===")
+    print(f"[DEBUG] Total unique IDs from masks (id_batch): {len(all_mask_ids)}")
+    print(f"[DEBUG] Mask IDs: {sorted(all_mask_ids)}")
+    print(f"[DEBUG] Total unique IDs in output: {len(all_output_ids)}")
+    print(f"[DEBUG] Output IDs: {sorted(all_output_ids)}")
+    missing_ids = all_mask_ids - all_output_ids
+    extra_ids = all_output_ids - all_mask_ids
+    if missing_ids:
+        print(f"[DEBUG] MISSING IDs (in masks but not output): {sorted(missing_ids)}")
+    if extra_ids:
+        print(f"[DEBUG] EXTRA IDs (in output but not masks): {sorted(extra_ids)}")
+    print(f"[DEBUG] Frames with ID count mismatch: {len(id_mismatch_frames)}")
+    if id_mismatch_frames:
+        print(f"[DEBUG] First mismatch details: {id_mismatch_frames[0]}")
+    print(f"[DEBUG] ==============================\n")
 
     out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
     payload = {
