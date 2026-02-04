@@ -242,6 +242,10 @@ def check_id_matching_stage1_stage2(
 ) -> Dict[str, Any]:
     """
     Compare IDs across stage1 (masklets_meta.json) and stage2 (raw_mhr.pt).
+    
+    Note: Stage 1 stores consecutive IDs (1, 2, 3, ...) in out_obj_ids and masks.
+    Stage 2 converts these to actual PIDs using the id_mapping.json.
+    This function uses the mapping to compare properly.
     """
     if not os.path.exists(meta_json):
         raise FileNotFoundError(f"Missing meta_json: {meta_json}")
@@ -250,7 +254,28 @@ def check_id_matching_stage1_stage2(
 
     with open(meta_json, "r", encoding="utf-8") as f:
         meta = json.load(f)
-    stage1_ids = {int(x) for x in meta.get("out_obj_ids", [])}
+    stage1_consecutive_ids = {int(x) for x in meta.get("out_obj_ids", [])}
+    
+    # Load ID mapping if available (consecutive -> actual)
+    consecutive_to_actual: Dict[int, int] = {}
+    # Try to load from masklets_meta.json first
+    if "consecutive_to_actual" in meta:
+        consecutive_to_actual = {int(k): int(v) for k, v in meta["consecutive_to_actual"].items()}
+    else:
+        # Try to load from id_mapping.json in the same directory
+        id_mapping_path = os.path.join(os.path.dirname(meta_json), "id_mapping.json")
+        if os.path.exists(id_mapping_path):
+            with open(id_mapping_path, "r", encoding="utf-8") as f:
+                id_mapping = json.load(f)
+            consecutive_to_actual = {int(k): int(v) for k, v in id_mapping.get("consecutive_to_actual", {}).items()}
+    
+    # Convert stage1 consecutive IDs to actual PIDs for comparison
+    if consecutive_to_actual:
+        stage1_actual_ids = {consecutive_to_actual.get(cid, cid) for cid in stage1_consecutive_ids}
+        print(f"[INFO] Using ID mapping to convert {len(stage1_consecutive_ids)} consecutive IDs to actual PIDs")
+    else:
+        stage1_actual_ids = stage1_consecutive_ids
+        print(f"[WARN] No ID mapping found; comparing IDs directly (may be inaccurate)")
 
     payload = torch.load(raw_mhr_pt, map_location="cpu", weights_only=False)
     frames = payload.get("frames", [])
@@ -259,27 +284,30 @@ def check_id_matching_stage1_stage2(
         for oid in fr.get("obj_ids", []):
             stage2_ids.add(int(oid))
 
-    missing_in_stage2 = sorted(stage1_ids - stage2_ids)
-    extra_in_stage2 = sorted(stage2_ids - stage1_ids)
+    missing_in_stage2 = sorted(stage1_actual_ids - stage2_ids)
+    extra_in_stage2 = sorted(stage2_ids - stage1_actual_ids)
 
     summary = {
-        "stage1_ids": sorted(stage1_ids),
+        "stage1_consecutive_ids": sorted(stage1_consecutive_ids),
+        "stage1_actual_ids": sorted(stage1_actual_ids),
         "stage2_ids": sorted(stage2_ids),
         "missing_in_stage2": missing_in_stage2,
         "extra_in_stage2": extra_in_stage2,
+        "id_mapping_used": bool(consecutive_to_actual),
     }
 
     print("[STAGE1 vs STAGE2 ID CHECK]")
-    print(f"  stage1_ids: {len(stage1_ids)}")
-    print(f"  stage2_ids: {len(stage2_ids)}")
+    print(f"  stage1 consecutive IDs: {len(stage1_consecutive_ids)} -> {sorted(stage1_consecutive_ids)[:10]}{'...' if len(stage1_consecutive_ids) > 10 else ''}")
+    print(f"  stage1 actual PIDs:     {len(stage1_actual_ids)} -> {sorted(stage1_actual_ids)[:10]}{'...' if len(stage1_actual_ids) > 10 else ''}")
+    print(f"  stage2 IDs:             {len(stage2_ids)} -> {sorted(stage2_ids)[:10]}{'...' if len(stage2_ids) > 10 else ''}")
     if missing_in_stage2:
         print(f"  missing_in_stage2: {missing_in_stage2}")
     else:
-        print("  missing_in_stage2: []")
+        print("  missing_in_stage2: [] (all stage1 IDs found in stage2)")
     if extra_in_stage2:
         print(f"  extra_in_stage2: {extra_in_stage2}")
     else:
-        print("  extra_in_stage2: []")
+        print("  extra_in_stage2: [] (no unexpected IDs in stage2)")
 
     return summary
 
