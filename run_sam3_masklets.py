@@ -228,31 +228,61 @@ def main():
     inference_state = predictor.init_state(video_path=args.video)
     predictor.clear_all_points_in_video(inference_state)
 
+    # Build ID mapping for SAM3D-Body compatibility.
+    # SAM3D-Body expects consecutive IDs (1, 2, 3, ...) internally.
+    # We use consecutive IDs for SAM3 tracking and map them back to actual PIDs later.
+    consecutive_to_actual: Dict[int, int] = {}
+    actual_to_consecutive: Dict[int, int] = {}
     out_obj_ids: List[int] = []
+    
     if args.boxes is not None:
         print("[INFO] Adding box prompts...")
-        for obj_id, frame_idx, box_abs in _parse_boxes(args.boxes):
+        parsed_boxes = _parse_boxes(args.boxes)
+        # Collect all unique actual IDs and build mapping
+        unique_actual_ids = sorted(set(obj_id for obj_id, _, _ in parsed_boxes))
+        for i, actual_id in enumerate(unique_actual_ids):
+            consecutive_id = i + 1
+            consecutive_to_actual[consecutive_id] = actual_id
+            actual_to_consecutive[actual_id] = consecutive_id
+        
+        for actual_id, frame_idx, box_abs in parsed_boxes:
+            consecutive_id = actual_to_consecutive[actual_id]
             rel_box = box_abs / np.array([width, height, width, height], dtype=np.float32)
+            print(f"  Consecutive ID {consecutive_id} (actual ID {actual_id}) at frame {frame_idx}")
             _, out_obj_ids, _low_res_masks, _video_res_masks = predictor.add_new_points_or_box(
                 inference_state=inference_state,
                 frame_idx=int(frame_idx),
-                obj_id=int(obj_id),
+                obj_id=int(consecutive_id),  # Use consecutive ID for SAM3
                 box=rel_box,
             )
 
     if args.points is not None:
         print("[INFO] Adding point prompts...")
         points_by_obj_frame = _parse_points(args.points)
-        for (obj_id, frame_idx), data in points_by_obj_frame.items():
+        # Collect all unique actual IDs and extend mapping
+        unique_actual_ids_pts = sorted(set(obj_id for (obj_id, _) in points_by_obj_frame.keys()))
+        # Merge with existing mapping from boxes
+        all_actual_ids = sorted(set(list(actual_to_consecutive.keys()) + unique_actual_ids_pts))
+        # Rebuild mapping to ensure consecutive IDs
+        consecutive_to_actual = {}
+        actual_to_consecutive = {}
+        for i, actual_id in enumerate(all_actual_ids):
+            consecutive_id = i + 1
+            consecutive_to_actual[consecutive_id] = actual_id
+            actual_to_consecutive[actual_id] = consecutive_id
+        
+        for (actual_id, frame_idx), data in points_by_obj_frame.items():
+            consecutive_id = actual_to_consecutive[actual_id]
             pts = np.array(data["points"], dtype=np.float32)
             pts[:, 0] /= float(width)
             pts[:, 1] /= float(height)
             points_tensor = torch.tensor(pts, dtype=torch.float32)
             labels_tensor = torch.tensor(data["labels"], dtype=torch.int32)
+            print(f"  Consecutive ID {consecutive_id} (actual ID {actual_id}) at frame {frame_idx}")
             _, out_obj_ids, _low_res_masks, _video_res_masks = predictor.add_new_points_or_box(
                 inference_state=inference_state,
                 frame_idx=int(frame_idx),
-                obj_id=int(obj_id),
+                obj_id=int(consecutive_id),  # Use consecutive ID for SAM3
                 points=points_tensor,
                 labels=labels_tensor,
             )
@@ -266,19 +296,30 @@ def main():
             raise RuntimeError("Failed to load hardcoded bbox/kp pickle for prompts.")
         selected_boxes = list(range(len(bboxes_kps_data[0]["bboxes"])))
         pid_list = bboxes_kps_data[0]["pids"]
+        
+        # Build mapping from consecutive IDs to actual PIDs
+        for i, pid in enumerate(pid_list):
+            consecutive_id = i + 1  # 1-based consecutive IDs
+            actual_pid = int(pid)
+            consecutive_to_actual[consecutive_id] = actual_pid
+            actual_to_consecutive[actual_pid] = consecutive_id
+        
         for bbox_idx in selected_boxes:
-            obj_id = int(pid_list[bbox_idx])
+            consecutive_id = bbox_idx + 1  # Use consecutive IDs for SAM3
+            actual_pid = int(pid_list[bbox_idx])
             bbox = np.array(bboxes_kps_data[0]["bboxes"][bbox_idx], dtype=np.float32)
             rel_box = bbox / np.array([width, height, width, height], dtype=np.float32)
+            print(f"  Consecutive ID {consecutive_id} (actual PID {actual_pid}) at frame 0")
             _, out_obj_ids, _low_res_masks, _video_res_masks = predictor.add_new_points_or_box(
                 inference_state=inference_state,
                 frame_idx=0,
-                obj_id=obj_id,
+                obj_id=consecutive_id,  # Use consecutive ID for SAM3
                 box=rel_box,
             )
 
     out_obj_ids = sorted(list(set([int(x) for x in out_obj_ids])))
-    print(f"[INFO] Tracking {len(out_obj_ids)} object(s): {out_obj_ids}")
+    print(f"[INFO] Tracking {len(out_obj_ids)} object(s) with consecutive IDs: {out_obj_ids}")
+    print(f"[INFO] ID mapping (consecutive -> actual): {consecutive_to_actual}")
 
     save_masklets(
         video_path=args.video,
@@ -290,6 +331,15 @@ def main():
         max_frame_num_to_track=int(args.max_frames),
     )
 
+    # Save ID mapping to separate file for stage 2 to use
+    id_mapping = {
+        "consecutive_to_actual": {str(k): v for k, v in consecutive_to_actual.items()},
+        "actual_to_consecutive": {str(k): v for k, v in actual_to_consecutive.items()},
+    }
+    id_mapping_path = os.path.join(output_dir, "id_mapping.json")
+    write_json(id_mapping_path, id_mapping)
+    print(f"[INFO] Saved ID mapping to: {id_mapping_path}")
+    
     meta = {
         "video_path": os.path.abspath(args.video),
         "config_path": os.path.abspath(cfg_path),
@@ -301,6 +351,8 @@ def main():
         "out_obj_ids": out_obj_ids,
         "image_dir": os.path.join(os.path.abspath(output_dir), "images"),
         "masks_dir": os.path.join(os.path.abspath(output_dir), "masks"),
+        "id_mapping_path": id_mapping_path,
+        "consecutive_to_actual": consecutive_to_actual,
     }
     write_json(os.path.join(output_dir, "masklets_meta.json"), meta)
 

@@ -184,9 +184,13 @@ def mask_generation(video_path: str, predictor, inference_state, output_dir, fps
 def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps, 
                 pipeline_mask=None, pipeline_rgb=None, depth_model=None,
                 detection_resolution=[256, 512], completion_resolution=[512, 1024], camera_intrinsics=None,
-                bboxes_kps_data=None, obj_id_to_bbox_idx=None):
+                bboxes_kps_data=None, obj_id_to_bbox_idx=None, consecutive_to_actual=None):
     """
     Run 4D generation with optional completion.
+    
+    Args:
+        consecutive_to_actual: Optional mapping {consecutive_id: actual_pid} to convert
+            SAM3's consecutive IDs back to actual person IDs when saving outputs.
     """
     print("[INFO] Running 4D generation...")
     
@@ -207,16 +211,26 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     # Debug: store per-person camera translation (pred_cam_t) to inspect units/axes.
     debug_cam_t_dir = os.path.join(output_dir, "debug_pred_cam_t")
     os.makedirs(debug_cam_t_dir, exist_ok=True)
+    
+    # Helper to convert consecutive ID to actual PID (if mapping provided)
+    def to_actual_pid(consecutive_id):
+        if consecutive_to_actual is not None and int(consecutive_id) in consecutive_to_actual:
+            return consecutive_to_actual[int(consecutive_id)]
+        return consecutive_id  # fallback to original ID
+    
+    # Create directories using actual PIDs
     for obj_id in out_obj_ids:
-        os.makedirs(f"{output_dir}/mesh_4d_individual/{obj_id}", exist_ok=True)
-        os.makedirs(f"{output_dir}/rendered_frames_individual/{obj_id}", exist_ok=True)
-        os.makedirs(os.path.join(debug_cam_t_dir, str(obj_id)), exist_ok=True)
+        actual_pid = to_actual_pid(obj_id)
+        os.makedirs(f"{output_dir}/mesh_4d_individual/{actual_pid}", exist_ok=True)
+        os.makedirs(f"{output_dir}/rendered_frames_individual/{actual_pid}", exist_ok=True)
+        os.makedirs(os.path.join(debug_cam_t_dir, str(actual_pid)), exist_ok=True)
 
     # Cache debug file handles for speed (one jsonl per person).
     debug_fhs = {}
     for obj_id in out_obj_ids:
-        debug_path = os.path.join(debug_cam_t_dir, str(obj_id), "pred_cam_t.jsonl")
-        debug_fhs[obj_id] = open(debug_path, "w", encoding="utf-8")
+        actual_pid = to_actual_pid(obj_id)
+        debug_path = os.path.join(debug_cam_t_dir, str(actual_pid), "pred_cam_t.jsonl")
+        debug_fhs[actual_pid] = open(debug_path, "w", encoding="utf-8")
     
     n = len(images_list)
     pred_res = detection_resolution
@@ -421,27 +435,30 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
                 )
 
                 # Save rendered frames for individual person (by tracked obj_id if available)
+                # Convert consecutive IDs to actual PIDs for saving
                 rend_img_list = visualize_sample(img, mask_output, estimator.faces, id_current)
                 for ri, rend_img in enumerate(rend_img_list):
                     if id_current is not None and ri < len(id_current):
-                        obj_id = int(id_current[ri])
+                        consecutive_id = int(id_current[ri])
                     else:
-                        obj_id = int(ri + 1)
+                        consecutive_id = int(ri + 1)
+                    actual_pid = to_actual_pid(consecutive_id)
                     cv2.imwrite(
-                        f"{output_dir}/rendered_frames_individual/{obj_id}/{os.path.basename(image_path)[:-4]}_{obj_id}.jpg",
+                        f"{output_dir}/rendered_frames_individual/{actual_pid}/{os.path.basename(image_path)[:-4]}_{actual_pid}.jpg",
                         rend_img.astype(np.uint8),
                     )
 
                 # Debug dump pred_cam_t (and pelvis proxy) per person for this frame.
-                # One json record per line in debug_pred_cam_t/<obj_id>/pred_cam_t.jsonl
+                # One json record per line in debug_pred_cam_t/<actual_pid>/pred_cam_t.jsonl
                 frame_name = os.path.basename(image_path)[:-4]
                 if mask_output is not None:
                     for pid, person_output in enumerate(mask_output):
                         if id_current is not None and pid < len(id_current):
-                            obj_id = int(id_current[pid])
+                            consecutive_id = int(id_current[pid])
                         else:
-                            obj_id = int(pid + 1)
-                        if obj_id not in debug_fhs:
+                            consecutive_id = int(pid + 1)
+                        actual_pid = to_actual_pid(consecutive_id)
+                        if actual_pid not in debug_fhs:
                             continue
 
                         pelvis_local = None
@@ -449,23 +466,26 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
                         try:
                             rec = build_pred_cam_t_debug_record(
                                 frame_name=frame_name,
-                                obj_id=obj_id,
+                                obj_id=actual_pid,  # Use actual PID in debug record
                                 person_output=person_output,
                                 bboxes_kps_data=bboxes_kps_data,
                                 obj_id_to_bbox_idx=obj_id_to_bbox_idx,
                             )
                         except Exception:
-                            rec = {"frame": frame_name, "obj_id": int(obj_id)}
+                            rec = {"frame": frame_name, "obj_id": int(actual_pid)}
 
-                        debug_fhs[obj_id].write(json.dumps(rec) + "\n")
+                        debug_fhs[actual_pid].write(json.dumps(rec) + "\n")
 
-                # Save mesh for individual person
+                # Save mesh for individual person - convert id_current to actual PIDs
+                id_current_actual = None
+                if id_current is not None:
+                    id_current_actual = [to_actual_pid(int(cid)) for cid in id_current]
                 save_mesh_results(
                     outputs=mask_output,
                     faces=estimator.faces,
                     save_dir=f"{output_dir}/mesh_4d_individual",
                     image_path=image_path,
-                    id_current=id_current,
+                    id_current=id_current_actual,
                 )
     finally:
         for _k, fh in debug_fhs.items():
@@ -612,22 +632,47 @@ Examples:
         frame_idx=0,
     )
     # Don't use 0 for object id as it is reserved for background in mask PNGs.
-    # Use stable non-zero IDs (e.g. 1000+) for tracking, but keep bbox indexing 0..N-1.
+    # SAM3D-Body expects consecutive IDs (1, 2, 3, ...) internally.
+    # Build a mapping from consecutive IDs to actual PIDs for later conversion.
     selected_boxes = list(range(len(bboxes_kps_data[0]['bboxes'])))
     pid_list = bboxes_kps_data[0]['pids']
+    
+    # Build bidirectional mappings:
+    # - consecutive_to_actual: {1: actual_pid1, 2: actual_pid2, ...}
+    # - actual_to_consecutive: {actual_pid1: 1, actual_pid2: 2, ...}
+    consecutive_to_actual = {}
+    actual_to_consecutive = {}
+    for i, pid in enumerate(pid_list):
+        consecutive_id = i + 1  # 1-based consecutive IDs
+        actual_pid = int(pid)
+        consecutive_to_actual[consecutive_id] = actual_pid
+        actual_to_consecutive[actual_pid] = consecutive_id
+    
     # Explicit mapping for debug/projection utilities (supports discontinuous obj_id values).
+    # Note: obj_id_to_bbox_idx uses ACTUAL PIDs as keys (for backward compatibility with kps lookup)
     obj_id_to_bbox_idx = {int(pid): int(i) for i, pid in enumerate(pid_list)}
+    
+    # Save the ID mapping to the output directory
+    id_mapping_path = os.path.join(output_dir, "id_mapping.json")
+    with open(id_mapping_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "consecutive_to_actual": {str(k): v for k, v in consecutive_to_actual.items()},
+            "actual_to_consecutive": {str(k): v for k, v in actual_to_consecutive.items()},
+        }, f, indent=2)
+    print(f"[INFO] Saved ID mapping to: {id_mapping_path}")
+    
     for bbox_idx in selected_boxes:
-        obj_id = int(pid_list[bbox_idx])
+        consecutive_id = bbox_idx + 1  # Use consecutive IDs (1, 2, 3, ...) for SAM3
+        actual_pid = int(pid_list[bbox_idx])
         bbox = bboxes_kps_data[0]['bboxes'][bbox_idx]
         rel_box = bbox / [width, height, width, height]
         
-        print(f"  Object {obj_id} at frame {0}: box relative coordinates {rel_box}")
+        print(f"  Consecutive ID {consecutive_id} (actual PID {actual_pid}) at frame {0}: box relative coordinates {rel_box}")
         
         _, out_obj_ids, low_res_masks, video_res_masks = predictor.add_new_points_or_box(
             inference_state=inference_state,
             frame_idx=0,
-            obj_id=obj_id,
+            obj_id=consecutive_id,  # Use consecutive ID for SAM3
             box=rel_box,
         )
         
@@ -689,6 +734,7 @@ Examples:
         detection_resolution, completion_resolution, cam_int,
         bboxes_kps_data=bboxes_kps_data,
         obj_id_to_bbox_idx=obj_id_to_bbox_idx,
+        consecutive_to_actual=consecutive_to_actual,
     )
     
     print(f"[INFO] Inference complete! Results saved to: {output_dir}")

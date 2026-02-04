@@ -105,6 +105,24 @@ def main() -> None:
     if not os.path.isdir(image_dir) or not os.path.isdir(masks_dir):
         raise FileNotFoundError(f"Missing images/ or masks/ in: {input_dir}")
 
+    # Load ID mapping from Stage 1 (consecutive -> actual PIDs)
+    id_mapping_path = os.path.join(input_dir, "id_mapping.json")
+    consecutive_to_actual: Dict[int, int] = {}
+    if os.path.exists(id_mapping_path):
+        with open(id_mapping_path, "r", encoding="utf-8") as f:
+            id_mapping = json.load(f)
+        consecutive_to_actual = {int(k): int(v) for k, v in id_mapping.get("consecutive_to_actual", {}).items()}
+        print(f"[INFO] Loaded ID mapping from: {id_mapping_path}")
+        print(f"[INFO] ID mapping (consecutive -> actual): {consecutive_to_actual}")
+    else:
+        print(f"[WARN] No id_mapping.json found in {input_dir}; IDs will not be converted.")
+    
+    def to_actual_pid(consecutive_id: int) -> int:
+        """Convert consecutive ID to actual PID using the mapping."""
+        if consecutive_to_actual and int(consecutive_id) in consecutive_to_actual:
+            return consecutive_to_actual[int(consecutive_id)]
+        return consecutive_id  # fallback to original ID
+
     cfg_path = args.config or os.path.join(REPO_DIR, "configs", "body4d.yaml")
     if not os.path.exists(cfg_path):
         cfg_path = os.path.join(REPO_DIR, cfg_path)
@@ -224,15 +242,17 @@ def main() -> None:
             obj_ids = []
             for pid, person in enumerate(out_list):
                 # These are numpy arrays already (process_frames converts to numpy)
+                # Get consecutive ID from mask, then convert to actual PID
                 if ids is not None and pid < len(ids):
-                    obj_id = int(ids[pid])
+                    consecutive_id = int(ids[pid])
                 else:
-                    obj_id = int(pid + 1)
-                obj_ids.append(obj_id)
+                    consecutive_id = int(pid + 1)
+                actual_pid = to_actual_pid(consecutive_id)
+                obj_ids.append(actual_pid)
                 # keep only "raw param" fields we need for Stage3
                 people.append(
                     {
-                        "obj_id": obj_id,
+                        "obj_id": actual_pid,  # Store actual PID
                         "global_rot": person.get("global_rot", None),
                         "body_pose": person.get("body_pose_params", None),
                         "hand": person.get("hand_pose_params", None),
@@ -273,10 +293,13 @@ def main() -> None:
             "camera_intrinsics": camera_intrinsics_path,
             "camera_scale": float(args.camera_scale),
             "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
+            "consecutive_to_actual": consecutive_to_actual,
         },
     }
     save_raw_mhr(out_path, payload)
     print(f"[INFO] Saved raw params to: {out_path}")
+    if consecutive_to_actual:
+        print(f"[INFO] IDs converted from consecutive to actual PIDs using mapping.")
 
     mem = cuda_mem_snapshot()
     mem["wall_time_sec"] = float(time.time() - t0)
