@@ -622,8 +622,7 @@ Examples:
     # if args.boxes is not None:
     print("[INFO] Adding bounding box prompts...")
     
-    # bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
-    bboxes_kps_data = load_bbox_kp("/mnt/data/sam4d_body/inputs/bboxes_kps_refined_undistorted", "428")
+    bboxes_kps_data = load_bbox_kp("/mnt/neon/zonghuan/data/sam4d_body/inputs/bboxes_kps_refined", "428")
     # Sanity check: visualize bboxes + kps on the first SAM3 input frame.
     save_sanity_first_frame_overlay(
         inference_state=inference_state,
