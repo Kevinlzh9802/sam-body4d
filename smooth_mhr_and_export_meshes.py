@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from tqdm import tqdm
 
 # Ensure imports work regardless of where this script is invoked from.
 import sys
@@ -106,6 +107,7 @@ def main() -> None:
     parser.add_argument("--ground-lambda-vel", type=float, default=1.0)
     parser.add_argument("--contact-z-thresh", type=float, default=0.03)
     parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
+    parser.add_argument("--mhr-batch-size", type=int, default=256, help="Batch size for MHR forward pass (reduce if OOM)")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -175,25 +177,57 @@ def main() -> None:
     if face is None:
         face = torch.zeros((T * N, 72), dtype=torch.float32, device=device)
 
-    mhr_out = head_pose.mhr_forward(
-        global_trans=global_rot * 0,
-        global_rot=global_rot,
-        body_pose_params=body_pose,
-        hand_pose_params=hand,
-        scale_params=scale,
-        shape_params=shape,
-        expr_params=face,
-        return_keypoints=True,
-        return_joint_coords=False,
-        return_model_params=False,
-        return_joint_rotations=False,
-    )
-    # mhr_forward signature can vary across checkpoints/versions.
-    # Expect at least (verts, j3d); ignore any extra returns.
-    if isinstance(mhr_out, (tuple, list)) and len(mhr_out) >= 2:
-        verts, j3d = mhr_out[0], mhr_out[1]
-    else:
-        raise ValueError(f"Unexpected mhr_forward output: {type(mhr_out)}")
+    # --- Batched MHR forward to avoid OOM ---
+    # Total samples = T * N (e.g., 1201 frames × 17 people = 20,417)
+    # Process in smaller batches to fit in GPU memory
+    total_samples = T * N
+    mhr_batch_size = int(args.mhr_batch_size)
+    print(f"[INFO] Running MHR forward in batches: {total_samples} samples, batch_size={mhr_batch_size}")
+    
+    verts_list = []
+    j3d_list = []
+    
+    num_batches = (total_samples + mhr_batch_size - 1) // mhr_batch_size
+    for batch_start in tqdm(range(0, total_samples, mhr_batch_size), total=num_batches, desc="MHR forward"):
+        batch_end = min(batch_start + mhr_batch_size, total_samples)
+        
+        mhr_out = head_pose.mhr_forward(
+            global_trans=global_rot[batch_start:batch_end] * 0,
+            global_rot=global_rot[batch_start:batch_end],
+            body_pose_params=body_pose[batch_start:batch_end],
+            hand_pose_params=hand[batch_start:batch_end],
+            scale_params=scale[batch_start:batch_end],
+            shape_params=shape[batch_start:batch_end],
+            expr_params=face[batch_start:batch_end],
+            return_keypoints=True,
+            return_joint_coords=False,
+            return_model_params=False,
+            return_joint_rotations=False,
+        )
+        # mhr_forward signature can vary across checkpoints/versions.
+        # Expect at least (verts, j3d); ignore any extra returns.
+        if isinstance(mhr_out, (tuple, list)) and len(mhr_out) >= 2:
+            batch_verts, batch_j3d = mhr_out[0], mhr_out[1]
+        else:
+            raise ValueError(f"Unexpected mhr_forward output: {type(mhr_out)}")
+        
+        # Move to CPU immediately to free GPU memory
+        verts_list.append(batch_verts.cpu())
+        j3d_list.append(batch_j3d.cpu())
+        
+        # Clear cache periodically
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+    
+    # Concatenate all batches
+    verts = torch.cat(verts_list, dim=0).to(device)
+    j3d = torch.cat(j3d_list, dim=0).to(device)
+    del verts_list, j3d_list
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    
+    print(f"[INFO] MHR forward complete: verts shape={verts.shape}, j3d shape={j3d.shape}")
+    
     # Camera system difference (match existing pipeline)
     verts[..., [1, 2]] *= -1
     j3d[..., [1, 2]] *= -1
