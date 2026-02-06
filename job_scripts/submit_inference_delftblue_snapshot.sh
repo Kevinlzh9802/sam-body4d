@@ -13,6 +13,21 @@ set -euo pipefail
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode raw_params --input /scratch/.../outputs/exp_XXXX
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../outputs/exp_XXXX
 #
+# Smoothing options (for --mode smooth):
+#   --no-option1    Disable built-in smoothing (EMA/Kalman + shape/scale freeze). Default: ON
+#   --enable-reproj Enable 2D Reprojection Optimization. Default: OFF
+#   --enable-ground Enable Ground-Plane / Contact Optimization. Default: OFF
+#
+# Examples:
+#   # Smooth with all defaults (Option1 ON, Option2 OFF, Option3 OFF)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX
+#
+#   # Smooth with 2D reprojection enabled
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX --enable-reproj
+#
+#   # Smooth with ground-plane optimization enabled, but disable built-in smoothing
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX --no-option1 --enable-ground
+#
 # You can still edit your repo after submission; the job will run the frozen snapshot.
 
 home_path=/home/zli33
@@ -38,6 +53,14 @@ s2_dir_host=""
 s2_code_dir_host=""
 use_live_code="0"
 
+# Smoothing options (for --mode smooth)
+# Option 1: Built-in smoothing (EMA/Kalman + shape/scale freeze) - default ON
+# Option 2: 2D Reprojection Optimization - default OFF
+# Option 3: Ground-Plane / Contact Optimization - default OFF
+smooth_no_option1=""
+smooth_enable_reproj=""
+smooth_enable_ground=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
@@ -55,6 +78,19 @@ while [[ $# -gt 0 ]]; do
     --exp-dir)
       exp_dir_override="$2"
       shift 2
+      ;;
+    # Smoothing options (for --mode smooth)
+    --no-option1|--no-smooth)
+      smooth_no_option1="1"
+      shift
+      ;;
+    --enable-reproj|--reproj)
+      smooth_enable_reproj="1"
+      shift
+      ;;
+    --enable-ground|--ground)
+      smooth_enable_ground="1"
+      shift
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -212,8 +248,29 @@ PY
 
     echo "[INFO] EXP_DIR: $exp_dir"
     echo "[INFO] EXP_S3_DIR: $s3_dir_host"
-    sbatch --export=ALL,EXP_DIR=$exp_dir,EXP_S3_DIR=$s3_dir_host,S3_CODE_DIR_HOST=$s3_code_dir_host,USE_LIVE_CODE=$use_live_code \
-      "$job_script_smooth" "$s3_dir_host"
+    
+    # Build smoothing options string for sbatch --export
+    smooth_opts="EXP_DIR=$exp_dir,EXP_S3_DIR=$s3_dir_host,S3_CODE_DIR_HOST=$s3_code_dir_host,USE_LIVE_CODE=$use_live_code"
+    if [ -n "${smooth_no_option1:-}" ]; then
+      smooth_opts="$smooth_opts,NO_OPTION1=1"
+      echo "[INFO] Smoothing: Option1 (built-in) DISABLED"
+    else
+      echo "[INFO] Smoothing: Option1 (built-in) enabled (default)"
+    fi
+    if [ -n "${smooth_enable_reproj:-}" ]; then
+      smooth_opts="$smooth_opts,ENABLE_REPROJ=1"
+      echo "[INFO] Smoothing: Option2 (2D Reprojection) ENABLED"
+    else
+      echo "[INFO] Smoothing: Option2 (2D Reprojection) disabled (default)"
+    fi
+    if [ -n "${smooth_enable_ground:-}" ]; then
+      smooth_opts="$smooth_opts,ENABLE_GROUND=1"
+      echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) ENABLED"
+    else
+      echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) disabled (default)"
+    fi
+    
+    sbatch --export=ALL,$smooth_opts "$job_script_smooth" "$s3_dir_host"
     ;;
   *)
     echo "[ERROR] Unknown --mode: $mode (expected: masklets|raw_params)" >&2
