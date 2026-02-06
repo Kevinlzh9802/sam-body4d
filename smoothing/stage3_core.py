@@ -211,7 +211,12 @@ def run_stage3_post_optimizations(
             raise ValueError("Could not build obj_id_to_bbox_idx from bbox/kps pkl (expected frame0['pids']).")
 
         pred_cam_t = mhr["pred_cam_t"].view(T, N, 3).contiguous()
-        X3d = keypoints3d_local.view(T, N, 70, 3).contiguous()
+        # MHR can return 70 (body only) or 308 (full SMPL-X) keypoints.
+        # Reproj optimization only needs the first 70 (body joints) where observed kp indices are defined.
+        K_kps = keypoints3d_local.shape[1] if keypoints3d_local.dim() == 3 else keypoints3d_local.numel() // (T * N * 3)
+        X3d_full = keypoints3d_local.view(T, N, K_kps, 3).contiguous()
+        K_body = min(K_kps, 70)
+        X3d = X3d_full[:, :, :K_body, :].contiguous()
 
         for si, oid in enumerate(obj_ids_all):
             # Only optimize if present at least once
@@ -241,7 +246,13 @@ def run_stage3_post_optimizations(
         extr = load_extrinsics_json(cfg.extrinsics_json, device=device)
 
         pred_cam_t = mhr["pred_cam_t"].view(T, N, 3).contiguous()
-        X3d = keypoints3d_local.view(T, N, 70, 3).contiguous()
+        # MHR can return 70 (body only) or 308 (full SMPL-X) keypoints.
+        # Ground optimization only needs the first 70 (body joints) where foot indices are defined.
+        K_kps = keypoints3d_local.shape[1] if keypoints3d_local.dim() == 3 else keypoints3d_local.numel() // (T * N * 3)
+        X3d_full = keypoints3d_local.view(T, N, K_kps, 3).contiguous()
+        # Use only the first 70 keypoints (body joints) for ground optimization
+        K_body = min(K_kps, 70)
+        X3d = X3d_full[:, :, :K_body, :].contiguous()
 
         for si, oid in enumerate(obj_ids_all):
             present = torch.tensor([1 if frame_obj_ids_slots[t][si] == oid else 0 for t in range(T)], device=device)
