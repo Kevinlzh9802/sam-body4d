@@ -20,6 +20,7 @@ set -euo pipefail
 #   --bbox-kps-pkl <path>     Path to bboxes_kps pickle (required for --enable-reproj)
 #   --camera-intrinsics-json <path>  Path to camera intrinsics JSON (required for --enable-reproj)
 #   --camera-scale <float>    Camera scale factor (default: 0.5)
+#   --extrinsics-json <path>  Path to camera extrinsics JSON (required for --enable-ground)
 #
 # NOTE: Paths can be specified as HOST paths (e.g. /scratch/zli33/data/sam4d/inputs/...)
 #       and will be automatically translated to container paths (/mnt/data/sam4d_body/...).
@@ -34,8 +35,10 @@ set -euo pipefail
 #     --bbox-kps-pkl /scratch/zli33/data/sam4d/inputs/bboxes_kps_refined/428.pkl \
 #     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json
 #
-#   # Smooth with ground-plane optimization enabled, but disable built-in smoothing
-#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX --no-option1 --enable-ground
+#   # Smooth with ground-plane optimization enabled (requires extrinsics path)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --enable-ground \
+#     --extrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/extrinsics-camera-04.json
 #
 # You can still edit your repo after submission; the job will run the frozen snapshot.
 
@@ -73,6 +76,7 @@ smooth_enable_ground=""
 bbox_kps_pkl_host=""
 camera_intrinsics_json_host=""
 camera_scale=""
+extrinsics_json_host=""
 
 # Translate a host path under $data_path into the corresponding container path.
 # This is defined early so it can be used in argument validation.
@@ -126,6 +130,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --camera-scale)
       camera_scale="$2"
+      shift 2
+      ;;
+    --extrinsics-json|--extrinsics)
+      extrinsics_json_host="$2"
       shift 2
       ;;
     *)
@@ -312,6 +320,12 @@ PY
     if [ -n "${smooth_enable_ground:-}" ]; then
       smooth_opts="$smooth_opts,ENABLE_GROUND=1"
       echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) ENABLED"
+      
+      # Validate required inputs for ground-plane optimization
+      if [ -z "${extrinsics_json_host:-}" ]; then
+        echo "[ERROR] --enable-ground requires --extrinsics-json <path>" >&2
+        exit 2
+      fi
     else
       echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) disabled (default)"
     fi
@@ -330,6 +344,11 @@ PY
     if [ -n "${camera_scale:-}" ]; then
       smooth_opts="$smooth_opts,CAMERA_SCALE=$camera_scale"
       echo "[INFO] camera_scale: $camera_scale"
+    fi
+    if [ -n "${extrinsics_json_host:-}" ]; then
+      extrinsics_json_container="$(host_to_container_path "$extrinsics_json_host")"
+      smooth_opts="$smooth_opts,EXTRINSICS_JSON=$extrinsics_json_container"
+      echo "[INFO] extrinsics_json: $extrinsics_json_host -> $extrinsics_json_container"
     fi
     
     sbatch --export=ALL,$smooth_opts "$job_script_smooth" "$s3_dir_host"
