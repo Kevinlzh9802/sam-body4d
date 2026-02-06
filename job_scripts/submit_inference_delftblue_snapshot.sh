@@ -14,16 +14,25 @@ set -euo pipefail
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../outputs/exp_XXXX
 #
 # Smoothing options (for --mode smooth):
-#   --no-option1    Disable built-in smoothing (EMA/Kalman + shape/scale freeze). Default: ON
-#   --enable-reproj Enable 2D Reprojection Optimization. Default: OFF
-#   --enable-ground Enable Ground-Plane / Contact Optimization. Default: OFF
+#   --no-option1              Disable built-in smoothing (EMA/Kalman + shape/scale freeze). Default: ON
+#   --enable-reproj           Enable 2D Reprojection Optimization. Default: OFF
+#   --enable-ground           Enable Ground-Plane / Contact Optimization. Default: OFF
+#   --bbox-kps-pkl <path>     Path to bboxes_kps pickle (required for --enable-reproj)
+#   --camera-intrinsics-json <path>  Path to camera intrinsics JSON (required for --enable-reproj)
+#   --camera-scale <float>    Camera scale factor (default: 0.5)
+#
+# NOTE: Paths can be specified as HOST paths (e.g. /scratch/zli33/data/sam4d/inputs/...)
+#       and will be automatically translated to container paths (/mnt/data/sam4d_body/...).
 #
 # Examples:
 #   # Smooth with all defaults (Option1 ON, Option2 OFF, Option3 OFF)
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX
 #
-#   # Smooth with 2D reprojection enabled
-#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX --enable-reproj
+#   # Smooth with 2D reprojection enabled (requires bbox and intrinsics paths)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --enable-reproj \
+#     --bbox-kps-pkl /scratch/zli33/data/sam4d/inputs/bboxes_kps_refined/428.pkl \
+#     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json
 #
 #   # Smooth with ground-plane optimization enabled, but disable built-in smoothing
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX --no-option1 --enable-ground
@@ -60,6 +69,20 @@ use_live_code="0"
 smooth_no_option1=""
 smooth_enable_reproj=""
 smooth_enable_ground=""
+# Reproj/Ground inputs (host paths - will be translated to container paths)
+bbox_kps_pkl_host=""
+camera_intrinsics_json_host=""
+camera_scale=""
+
+# Translate a host path under $data_path into the corresponding container path.
+# This is defined early so it can be used in argument validation.
+host_to_container_path() {
+  local p="$1"
+  case "$p" in
+    "$data_path"/*) echo "/mnt/data/sam4d_body/${p#"$data_path"/}" ;;
+    *) echo "$p" ;;  # Return unchanged if not under data_path
+  esac
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -91,6 +114,19 @@ while [[ $# -gt 0 ]]; do
     --enable-ground|--ground)
       smooth_enable_ground="1"
       shift
+      ;;
+    # Reproj/Ground input paths (can be host paths - will be auto-translated)
+    --bbox-kps-pkl)
+      bbox_kps_pkl_host="$2"
+      shift 2
+      ;;
+    --camera-intrinsics-json|--camera-intrinsics)
+      camera_intrinsics_json_host="$2"
+      shift 2
+      ;;
+    --camera-scale)
+      camera_scale="$2"
+      shift 2
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -260,6 +296,16 @@ PY
     if [ -n "${smooth_enable_reproj:-}" ]; then
       smooth_opts="$smooth_opts,ENABLE_REPROJ=1"
       echo "[INFO] Smoothing: Option2 (2D Reprojection) ENABLED"
+      
+      # Validate required inputs for reproj
+      if [ -z "${bbox_kps_pkl_host:-}" ]; then
+        echo "[ERROR] --enable-reproj requires --bbox-kps-pkl <path>" >&2
+        exit 2
+      fi
+      if [ -z "${camera_intrinsics_json_host:-}" ]; then
+        echo "[ERROR] --enable-reproj requires --camera-intrinsics-json <path>" >&2
+        exit 2
+      fi
     else
       echo "[INFO] Smoothing: Option2 (2D Reprojection) disabled (default)"
     fi
@@ -268,6 +314,22 @@ PY
       echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) ENABLED"
     else
       echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) disabled (default)"
+    fi
+    
+    # Add reproj/ground input paths (translate host -> container paths)
+    if [ -n "${bbox_kps_pkl_host:-}" ]; then
+      bbox_kps_pkl_container="$(host_to_container_path "$bbox_kps_pkl_host")"
+      smooth_opts="$smooth_opts,BBOX_KPS_PKL=$bbox_kps_pkl_container"
+      echo "[INFO] bbox_kps_pkl: $bbox_kps_pkl_host -> $bbox_kps_pkl_container"
+    fi
+    if [ -n "${camera_intrinsics_json_host:-}" ]; then
+      camera_intrinsics_json_container="$(host_to_container_path "$camera_intrinsics_json_host")"
+      smooth_opts="$smooth_opts,CAMERA_INTRINSICS_JSON=$camera_intrinsics_json_container"
+      echo "[INFO] camera_intrinsics_json: $camera_intrinsics_json_host -> $camera_intrinsics_json_container"
+    fi
+    if [ -n "${camera_scale:-}" ]; then
+      smooth_opts="$smooth_opts,CAMERA_SCALE=$camera_scale"
+      echo "[INFO] camera_scale: $camera_scale"
     fi
     
     sbatch --export=ALL,$smooth_opts "$job_script_smooth" "$s3_dir_host"
