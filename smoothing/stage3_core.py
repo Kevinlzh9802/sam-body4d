@@ -47,6 +47,26 @@ def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarra
     )
     return K, dist_coeffs
 
+def read_camera_intrinsics_new(intrinsic_file: str):
+    with open(intrinsic_file, "r") as f:
+        intrinsic_data = json.load(f)
+        params = intrinsic_data['Calibration']['cameras'][0]['model']['ptr_wrapper']['data']['parameters']
+
+        f = params['f']['val']
+        cx = params['cx']['val']
+        cy = params['cy']['val']
+        
+        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+        ks = [params[f'k{i}']['val'] for i in range(1, 5)]
+        dist_coeffs = np.array(ks)
+
+    return K, dist_coeffs
+
+def adjust_K(K, scale):
+    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
+             [0,           K[1,1]*scale, K[1,2]*scale],
+             [0,           0,         1]])
+    return K_resized
 
 def stack_frames_to_tensors(
     frames: List[Dict[str, Any]],
@@ -180,7 +200,9 @@ def run_stage3_post_optimizations(
         if not cfg.bbox_kps_pkl:
             raise ValueError("--bbox-kps-pkl is required for reprojection optimization.")
 
-        K_np, _dist = read_camera_intrinsics(cfg.camera_intrinsics_json, scale=float(cfg.camera_scale))
+        # K_np, _dist = read_camera_intrinsics(cfg.camera_intrinsics_json, scale=float(cfg.camera_scale))
+        K_np, _dist = read_camera_intrinsics_new(cfg.camera_intrinsics_json)
+        K_np = adjust_K(K_np, scale=float(cfg.camera_scale))
         K = torch.from_numpy(K_np).to(device=device, dtype=torch.float32)
 
         bboxes_kps_data = load_bboxes_kps_pkl(cfg.bbox_kps_pkl)
