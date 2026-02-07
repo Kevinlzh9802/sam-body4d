@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+import trimesh
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -48,6 +49,7 @@ from smoothing.stage3_core import (
     freeze_shape_scale_first_frame,
     run_stage3_post_optimizations,
 )
+from smoothing.ground_plane_opt import load_extrinsics_json
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.ground_plane_opt import GroundOptConfig
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
@@ -108,6 +110,9 @@ def main() -> None:
     parser.add_argument("--contact-z-thresh", type=float, default=0.03)
     parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
     parser.add_argument("--mhr-batch-size", type=int, default=256, help="Batch size for MHR forward pass (reduce if OOM)")
+    parser.add_argument("--export-world-space", action="store_true", 
+                        help="Export meshes in world coordinates (requires --extrinsics-json). "
+                             "When enabled, meshes will be transformed so ground plane is z=0.")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -285,6 +290,16 @@ def main() -> None:
     mesh_dir = os.path.join(out_dir, "meshes_4d_individual")
     os.makedirs(mesh_dir, exist_ok=True)
 
+    # Load extrinsics for world-space export if requested
+    extr = None
+    if args.export_world_space:
+        if not args.extrinsics_json:
+            raise ValueError("--export-world-space requires --extrinsics-json to be specified.")
+        extr = load_extrinsics_json(args.extrinsics_json, device=device)
+        print("[INFO] Exporting meshes in WORLD coordinates (ground plane at z=0)")
+    else:
+        print("[INFO] Exporting meshes in CAMERA coordinates")
+
     # Export per frame/per obj_id (only when present)
     faces_np = estimator.faces
     for ti in range(T):
@@ -294,9 +309,25 @@ def main() -> None:
             bi = ti * N + si
             v = verts[bi].detach().float().cpu().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
-            fl = float(focal[bi, 0].detach().cpu().item()) if focal is not None else 1000.0
-            renderer = Renderer(focal_length=fl, faces=faces_np)
-            mesh = renderer.vertices_to_trimesh(v, camt, mesh_base_color=(0.65, 0.74, 0.86))
+            
+            # Apply camera translation to get camera-space coordinates
+            v_cam = v + camt
+            
+            if extr is not None:
+                # Transform from camera space to world space
+                v_cam_t = torch.from_numpy(v_cam).to(device=device, dtype=torch.float32)
+                v_world = extr.cam_to_world(v_cam_t).cpu().numpy()
+                mesh_vertices = v_world
+            else:
+                mesh_vertices = v_cam
+            
+            # Create mesh directly with transformed vertices (no additional translation)
+            vertex_colors = np.array([(0.65, 0.74, 0.86, 1.0)] * mesh_vertices.shape[0])
+            mesh = trimesh.Trimesh(
+                mesh_vertices,
+                faces_np.copy(),
+                vertex_colors=vertex_colors,
+            )
             obj_out_dir = os.path.join(mesh_dir, str(oid))
             os.makedirs(obj_out_dir, exist_ok=True)
             mesh.export(os.path.join(obj_out_dir, f"{frame_names[ti]}.ply"))

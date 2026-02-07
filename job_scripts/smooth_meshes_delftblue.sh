@@ -117,5 +117,6 @@ apptainer exec --nv \
     ${GROUND_LAMBDA_PRIOR:+--ground-lambda-prior "$GROUND_LAMBDA_PRIOR"} \
     ${GROUND_LAMBDA_VEL:+--ground-lambda-vel "$GROUND_LAMBDA_VEL"} \
     ${CONTACT_Z_THRESH:+--contact-z-thresh "$CONTACT_Z_THRESH"} \
-    ${CONTACT_VXY_THRESH:+--contact-vxy-thresh "$CONTACT_VXY_THRESH"}
+    ${CONTACT_VXY_THRESH:+--contact-vxy-thresh "$CONTACT_VXY_THRESH"} \
+    ${EXPORT_WORLD_SPACE:+--export-world-space}
 

@@ -21,6 +21,7 @@ set -euo pipefail
 #   --camera-intrinsics-json <path>  Path to camera intrinsics JSON (required for --enable-reproj)
 #   --camera-scale <float>    Camera scale factor (default: 0.5)
 #   --extrinsics-json <path>  Path to camera extrinsics JSON (required for --enable-ground)
+#   --export-world-space      Export meshes in world coordinates where ground is z=0 (requires --extrinsics-json)
 #
 # NOTE: Paths can be specified as HOST paths (e.g. /scratch/zli33/data/sam4d/inputs/...)
 #       and will be automatically translated to container paths (/mnt/data/sam4d_body/...).
@@ -39,6 +40,12 @@ set -euo pipefail
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
 #     --enable-ground \
 #     --extrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/extrinsics-camera-04.json
+#
+#   # Smooth with ground optimization AND export in world space (feet on z=0 ground plane)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --enable-ground \
+#     --extrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/extrinsics-camera-04.json \
+#     --export-world-space
 #
 # You can still edit your repo after submission; the job will run the frozen snapshot.
 
@@ -77,6 +84,7 @@ bbox_kps_pkl_host=""
 camera_intrinsics_json_host=""
 camera_scale=""
 extrinsics_json_host=""
+export_world_space=""
 
 # Translate a host path under $data_path into the corresponding container path.
 # This is defined early so it can be used in argument validation.
@@ -135,6 +143,10 @@ while [[ $# -gt 0 ]]; do
     --extrinsics-json|--extrinsics)
       extrinsics_json_host="$2"
       shift 2
+      ;;
+    --export-world-space|--world-space)
+      export_world_space="1"
+      shift
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -349,6 +361,17 @@ PY
       extrinsics_json_container="$(host_to_container_path "$extrinsics_json_host")"
       smooth_opts="$smooth_opts,EXTRINSICS_JSON=$extrinsics_json_container"
       echo "[INFO] extrinsics_json: $extrinsics_json_host -> $extrinsics_json_container"
+    fi
+    if [ -n "${export_world_space:-}" ]; then
+      smooth_opts="$smooth_opts,EXPORT_WORLD_SPACE=1"
+      echo "[INFO] Export: WORLD space (ground plane at z=0)"
+      # Validate that extrinsics is provided for world-space export
+      if [ -z "${extrinsics_json_host:-}" ]; then
+        echo "[ERROR] --export-world-space requires --extrinsics-json <path>" >&2
+        exit 2
+      fi
+    else
+      echo "[INFO] Export: CAMERA space (default)"
     fi
     
     sbatch --export=ALL,$smooth_opts "$job_script_smooth" "$s3_dir_host"
