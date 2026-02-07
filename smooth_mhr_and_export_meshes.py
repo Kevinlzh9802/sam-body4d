@@ -110,9 +110,10 @@ def main() -> None:
     parser.add_argument("--contact-z-thresh", type=float, default=0.03)
     parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
     parser.add_argument("--mhr-batch-size", type=int, default=256, help="Batch size for MHR forward pass (reduce if OOM)")
-    parser.add_argument("--export-world-space", action="store_true", 
-                        help="Export meshes in world coordinates (requires --extrinsics-json). "
-                             "When enabled, meshes will be transformed so ground plane is z=0.")
+    parser.add_argument("--export-camera-space", action="store_true", 
+                        help="Export meshes in camera coordinates instead of world coordinates. "
+                             "By default, meshes are exported in world space (requires --extrinsics-json) "
+                             "where the ground plane is at z=0.")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -290,14 +291,17 @@ def main() -> None:
     mesh_dir = os.path.join(out_dir, "meshes_4d_individual")
     os.makedirs(mesh_dir, exist_ok=True)
 
-    # Load extrinsics for world-space export if requested
+    # Load extrinsics for world-space export (default) unless --export-camera-space is set
     extr = None
-    if args.export_world_space:
+    export_world = not args.export_camera_space
+    if export_world:
         if not args.extrinsics_json:
-            raise ValueError("--export-world-space requires --extrinsics-json to be specified.")
-        extr = load_extrinsics_json(args.extrinsics_json, device=device)
-        print("[INFO] Exporting meshes in WORLD coordinates (ground plane at z=0)")
-    else:
+            print("[WARN] World-space export requires --extrinsics-json. Falling back to camera space.")
+            export_world = False
+        else:
+            extr = load_extrinsics_json(args.extrinsics_json, device=device)
+            print("[INFO] Exporting meshes in WORLD coordinates (ground plane at z=0)")
+    if not export_world:
         print("[INFO] Exporting meshes in CAMERA coordinates")
 
     # Export per frame/per obj_id (only when present)
