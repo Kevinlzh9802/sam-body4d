@@ -30,6 +30,7 @@ def bbox_from_mask_convex_hull(binary_mask: np.ndarray) -> Optional[List[int]]:
 
 def extract_bboxes_from_masks(
     masks_dir: str,
+    consecutive_to_actual: Optional[Dict[int, int]] = None,
 ) -> Dict[str, Dict[str, Dict[str, List[int]]]]:
     """
     Walk all mask PNGs in *masks_dir* and return::
@@ -48,7 +49,11 @@ def extract_bboxes_from_masks(
 
     Image IDs are the integer frame index (from the filename,
     e.g. ``00000001.png`` -> ``"1"``).
-    Person IDs are the non-zero pixel values found in each mask.
+
+    Person IDs in the output are the **actual** IDs (e.g. from bbox.pkl)
+    when *consecutive_to_actual* is provided.  The mask pixel values are
+    consecutive tracking IDs; this mapping translates them back.
+    If *consecutive_to_actual* is ``None``, the raw pixel values are used.
     """
     mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")))
 
@@ -68,7 +73,12 @@ def extract_bboxes_from_masks(
             binary = ((mask == obj_id) * 255).astype(np.uint8)
             bb = bbox_from_mask_convex_hull(binary)
             if bb is not None:
-                bbox_dict[str(int(obj_id))] = bb
+                # Map consecutive tracking ID -> actual person ID
+                if consecutive_to_actual is not None:
+                    actual_id = consecutive_to_actual.get(int(obj_id), int(obj_id))
+                else:
+                    actual_id = int(obj_id)
+                bbox_dict[str(actual_id)] = bb
 
         if bbox_dict:
             annotations[image_id] = {"bbox": bbox_dict}

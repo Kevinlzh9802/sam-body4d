@@ -334,7 +334,10 @@ def main():
 
     # Extract per-person bounding boxes from saved masks
     print("[INFO] Extracting bounding boxes from masks...")
-    mask_bbox_data = extract_bboxes_from_masks(os.path.join(output_dir, "masks"))
+    mask_bbox_data = extract_bboxes_from_masks(
+        os.path.join(output_dir, "masks"),
+        consecutive_to_actual=consecutive_to_actual,
+    )
     mask_bbox_path = os.path.join(output_dir, "mask_bbox.json")
     write_json(mask_bbox_path, mask_bbox_data)
     print(f"[INFO] Saved mask bounding boxes to: {mask_bbox_path}")
