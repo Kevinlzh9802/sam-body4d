@@ -26,6 +26,7 @@ from tqdm import tqdm
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
 from utils.image_utils import load_bbox_kp
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
+from utils.mask_bbox import extract_bboxes_from_masks
 
 
 def read_video_metadata(path: str) -> Tuple[float, int, int, int]:
@@ -330,6 +331,13 @@ def main():
         out_obj_ids=out_obj_ids,
         max_frame_num_to_track=int(args.max_frames),
     )
+
+    # Extract per-person bounding boxes from saved masks
+    print("[INFO] Extracting bounding boxes from masks...")
+    mask_bbox_data = extract_bboxes_from_masks(os.path.join(output_dir, "masks"))
+    mask_bbox_path = os.path.join(output_dir, "mask_bbox.json")
+    write_json(mask_bbox_path, mask_bbox_data)
+    print(f"[INFO] Saved mask bounding boxes to: {mask_bbox_path}")
 
     # Save ID mapping to separate file for stage 2 to use
     id_mapping = {
