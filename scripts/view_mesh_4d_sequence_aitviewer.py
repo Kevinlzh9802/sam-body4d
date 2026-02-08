@@ -100,6 +100,7 @@ def _load_sequence_for_person(
     faces_ref: Optional[np.ndarray] = None
     used_files: List[str] = []
 
+    expected_verts_shape = None
     for p in ply_files:
         v, f = _load_ply_mesh(p)
         if faces_ref is None:
@@ -108,10 +109,21 @@ def _load_sequence_for_person(
             # If faces differ, keep first faces (common for consistent topology).
             if f.shape != faces_ref.shape or not np.array_equal(f, faces_ref):
                 pass
+        # Track expected shape and warn on mismatch
+        if expected_verts_shape is None:
+            expected_verts_shape = v.shape
+        elif v.shape != expected_verts_shape:
+            print(f"[ERROR] Vertex shape mismatch in {p}: got {v.shape}, expected {expected_verts_shape}")
+            print(f"        First file had shape {expected_verts_shape}, this file differs.")
+            print(f"        Skipping this file to avoid stack error.")
+            continue
         verts_seq.append(v)
         used_files.append(os.path.basename(p))
 
     assert faces_ref is not None
+    if not verts_seq:
+        print(f"[ERROR] No valid PLY files could be loaded from {person_dir}")
+        return None
     verts = np.stack(verts_seq, axis=0)  # (T, V, 3)
     return verts, faces_ref, used_files
 
@@ -183,6 +195,8 @@ def view_single_person_centered(
     center_mode: str = "mean",
     center_vertex: Optional[int] = None,
     show_floor: bool = True,
+    camera_preset: str = "default",
+    camera_distance: float = 5.0,
 ) -> None:
     """
     View ONE person's mesh sequence, centered per-frame so the chosen center is at the origin.
@@ -212,6 +226,26 @@ def view_single_person_centered(
         v.scene.floor.plane = "xy"
         v.scene.floor.side_length = 20
 
+    # Set camera position based on preset
+    if camera_preset != "default":
+        scene_center = np.array([0.0, 0.0, 0.0])  # Centered mesh is at origin
+        dist = camera_distance
+        
+        if camera_preset == "top":
+            cam_pos = scene_center + np.array([0, 0, dist])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        elif camera_preset == "front":
+            cam_pos = scene_center + np.array([0, -dist, 1.0])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        elif camera_preset == "side":
+            cam_pos = scene_center + np.array([dist, 0, 1.0])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        
+        print(f"[INFO] Camera preset: {camera_preset}, distance: {dist}")
+
     if used:
         print(f"[OK] Centered ID {person_id}: {verts.shape[0]} frames; first={used[0]} last={used[-1]}")
     print("Controls: SPACE play/pause, left/right arrows step frames.")
@@ -234,6 +268,18 @@ def meshes_4d() -> None:
         choices=["truncate", "pad", "none"],
         default="truncate",
         help="How to sync different sequence lengths for viewing (default: truncate)",
+    )
+    parser.add_argument(
+        "--camera",
+        choices=["default", "top", "front", "side"],
+        default="default",
+        help="Camera view preset (default: aitviewer default, top: bird's eye view)",
+    )
+    parser.add_argument(
+        "--camera-distance",
+        type=float,
+        default=10.0,
+        help="Camera distance from scene center for preset views (default: 10.0)",
     )
     args = parser.parse_args()
 
@@ -301,6 +347,33 @@ def meshes_4d() -> None:
 
     v.scene.floor.plane = "xy"
     v.scene.floor.side_length = 20
+
+    # Set camera position based on preset
+    if args.camera != "default":
+        # Compute scene center from all vertices
+        all_verts = np.concatenate(list(vertices_by_id.values()), axis=0)  # (total_frames, V, 3)
+        scene_center = all_verts.mean(axis=(0, 1))  # (3,)
+        dist = args.camera_distance
+        
+        if args.camera == "top":
+            # Bird's eye view: camera above looking down
+            cam_pos = scene_center + np.array([0, 0, dist])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        elif args.camera == "front":
+            # Front view: camera in front (negative Y) looking at center
+            cam_pos = scene_center + np.array([0, -dist, 1.5])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        elif args.camera == "side":
+            # Side view: camera to the side (positive X) looking at center
+            cam_pos = scene_center + np.array([dist, 0, 1.5])
+            v.scene.camera.position = cam_pos
+            v.scene.camera.target = scene_center
+        
+        print(f"[INFO] Camera preset: {args.camera}, distance: {dist}")
+        print(f"       Position: {v.scene.camera.position}, Target: {v.scene.camera.target}")
+
     print("Controls: SPACE play/pause, left/right arrows step frames.")
     v.run()
 
@@ -344,6 +417,18 @@ def meshes_4d_single_person() -> None:
         default="truncate",
         help="How to sync different sequence lengths for viewing (default: truncate)",
     )
+    parser.add_argument(
+        "--camera",
+        choices=["default", "top", "front", "side"],
+        default="default",
+        help="Camera view preset (default: aitviewer default, top: bird's eye view)",
+    )
+    parser.add_argument(
+        "--camera-distance",
+        type=float,
+        default=5.0,
+        help="Camera distance from scene center for preset views (default: 5.0)",
+    )
     args = parser.parse_args()
 
     mesh_dir = args.mesh_dir
@@ -360,6 +445,8 @@ def meshes_4d_single_person() -> None:
             center_mode=args.center_mode,
             center_vertex=args.center_vertex,
             show_floor=(not args.no_floor),
+            camera_preset=args.camera,
+            camera_distance=args.camera_distance,
         )
         return
 
