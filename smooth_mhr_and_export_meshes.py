@@ -50,6 +50,8 @@ from smoothing.stage3_core import (
     run_stage3_post_optimizations,
 )
 from smoothing.ground_plane_opt import load_extrinsics_json
+from smoothing.feet_z_plot import plot_feet_z_from_stage3
+from smoothing.projection_2d_plot import plot_2d_projections_from_stage3
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.ground_plane_opt import GroundOptConfig
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
@@ -326,17 +328,55 @@ def main() -> None:
                 mesh_vertices = v_cam
             
             # Create mesh directly with transformed vertices (no additional translation)
+            # process=False prevents trimesh from merging duplicate vertices which would
+            # change vertex count and break sequence loading in viewers
             vertex_colors = np.array([(0.65, 0.74, 0.86, 1.0)] * mesh_vertices.shape[0])
             mesh = trimesh.Trimesh(
                 mesh_vertices,
                 faces_np.copy(),
                 vertex_colors=vertex_colors,
+                process=False,
             )
             obj_out_dir = os.path.join(mesh_dir, str(oid))
             os.makedirs(obj_out_dir, exist_ok=True)
             mesh.export(os.path.join(obj_out_dir, f"{frame_names[ti]}.ply"))
 
     print(f"[INFO] Exported smoothed meshes to: {mesh_dir}")
+
+    # Plot feet z-coordinates in world space (only if extrinsics available)
+    if extr is not None:
+        feet_z_plot_path = os.path.join(out_dir, "feet_z_world.png")
+        try:
+            plot_feet_z_from_stage3(
+                keypoints3d_local=j3d,
+                pred_cam_t=pred_cam_t,
+                extr=extr,
+                T=T,
+                N=N,
+                obj_ids_all=obj_ids_all,
+                frame_obj_ids_slots=frame_obj_ids_slots,
+                output_path=feet_z_plot_path,
+                title="Average Feet Z-Coordinate (World Space) - Post Stage 3",
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
+        
+        # Plot 2D projections (bird's eye view) every 100 frames
+        projection_2d_dir = os.path.join(out_dir, "projection_2d")
+        try:
+            plot_2d_projections_from_stage3(
+                keypoints3d_local=j3d,
+                pred_cam_t=pred_cam_t,
+                extr=extr,
+                T=T,
+                N=N,
+                obj_ids_all=obj_ids_all,
+                frame_obj_ids_slots=frame_obj_ids_slots,
+                output_dir=projection_2d_dir,
+                frame_interval=100,
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to generate 2D projection plots: {e}")
 
 
 if __name__ == "__main__":
