@@ -2,14 +2,22 @@ import subprocess
 import json
 import os
 
-def get_video_info(video_path):
-    """Get video information using ffprobe."""
+def get_video_info(video_path, use_count_frames: bool = False):
+    """
+    Get video information using ffprobe.
+    
+    Args:
+        video_path: Path to video file
+        use_count_frames: If True, use -count_frames for accurate frame count (slower).
+    """
     cmd = [
         'ffprobe', '-v', 'quiet',
         '-print_format', 'json',
         '-show_format', '-show_streams',
-        video_path
     ]
+    if use_count_frames:
+        cmd.extend(['-count_frames', '-select_streams', 'v:0'])
+    cmd.append(video_path)
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     info = json.loads(result.stdout)
     
@@ -26,10 +34,20 @@ def get_video_info(video_path):
     fps_parts = video_stream['r_frame_rate'].split('/')
     fps = float(fps_parts[0]) / float(fps_parts[1])
     duration = float(info['format']['duration'])
+    # Use nb_read_frames (from -count_frames) or nb_frames if available
+    nb_read = video_stream.get('nb_read_frames')
+    nb_frames = video_stream.get('nb_frames')
+    if nb_read is not None and nb_read != 'N/A':
+        num_frames = int(nb_read)
+    elif nb_frames is not None and nb_frames != 'N/A':
+        num_frames = int(nb_frames)
+    else:
+        num_frames = int(round(duration * fps))
     
     return {
         'fps': fps,
         'duration': duration,
+        'num_frames': num_frames,
         'width': int(video_stream['width']),
         'height': int(video_stream['height'])
     }
@@ -48,7 +66,7 @@ def parse_time_to_seconds(time_str: str) -> float:
 
 
 def cut_video_segment(video_path: str, start_time: str, end_time: str, output_path: str, 
-                      copy_codec: bool = True, verbose: bool = True):
+                      copy_codec: bool = True, verbose: bool = True, log_original: bool = True):
     """
     Cut a video segment from start_time to end_time using ffmpeg.
     
@@ -60,6 +78,7 @@ def cut_video_segment(video_path: str, start_time: str, end_time: str, output_pa
         copy_codec: If True, copy streams without re-encoding (fast, lossless).
                    If False, re-encode (slower, but more compatible)
         verbose: Print ffmpeg output
+        log_original: If True, log original video frame count (set False when called in batch to avoid repetition)
     
     Returns:
         True if successful
@@ -90,6 +109,8 @@ def cut_video_segment(video_path: str, start_time: str, end_time: str, output_pa
     try:
         info = get_video_info(video_path)
         duration = info['duration']
+        if verbose and log_original:
+            print(f"Original video: {info['num_frames']} frames")
         
         if start_seconds >= duration:
             raise ValueError(f"Start time {start_time} ({start_seconds}s) is beyond video duration ({duration}s)")
@@ -132,28 +153,26 @@ def cut_video_segment(video_path: str, start_time: str, end_time: str, output_pa
     # Output file
     cmd.append(output_path)
     
-    # Print command
+    # Print command (only in verbose mode)
     if verbose:
-        print(f"Cutting video segment:")
-        print(f"  Input: {video_path}")
-        print(f"  Start: {start_time} ({start_seconds}s)")
-        print(f"  End: {end_time} ({end_seconds}s)")
-        print(f"  Duration: {segment_duration}s")
-        print(f"  Output: {output_path}")
-        print(f"  Command: {' '.join(cmd)}")
+        print(f"Cutting: {video_path} -> {output_path} ({segment_duration:.1f}s)")
     
-    # Run ffmpeg
+    # Run ffmpeg (always capture output to avoid ffmpeg version/config/stream spam)
     try:
         result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE if not verbose else None,
-            stderr=subprocess.PIPE if not verbose else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             check=True
         )
         
         if verbose:
-            print(f"✓ Successfully created: {output_path}")
+            try:
+                out_info = get_video_info(output_path)
+                print(f"  Cut video: {out_info['num_frames']} frames")
+            except Exception as e:
+                print(f"  Cut video: (could not get frame count: {e})")
         
         return True
         
@@ -164,6 +183,69 @@ def cut_video_segment(video_path: str, start_time: str, end_time: str, output_pa
         raise RuntimeError(error_msg)
     except FileNotFoundError:
         raise RuntimeError("ffmpeg not found. Please install ffmpeg: sudo apt-get install ffmpeg")
+
+def cut_video_frames(
+    video_path: str,
+    start_frame: int,
+    num_frames: int,
+    output_path: str,
+    verbose: bool = True,
+) -> bool:
+    """
+    Extract exactly num_frames starting from start_frame using ffmpeg select filter.
+    Re-encodes for frame-accurate extraction (stream copy cannot guarantee exact frames).
+    
+    Args:
+        video_path: Path to input video
+        start_frame: Zero-based start frame index
+        num_frames: Number of frames to extract
+        output_path: Path to output video
+        verbose: Print progress
+    
+    Returns:
+        True if successful
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    if start_frame < 0 or num_frames <= 0:
+        raise ValueError("start_frame must be >= 0 and num_frames must be > 0")
+    
+    end_frame = start_frame + num_frames - 1  # inclusive in select filter
+    # Commas inside between() must be escaped so ffmpeg doesn't treat them as filter separators
+    vf = f"select='between(n\\,{start_frame}\\,{end_frame})',setpts=PTS-STARTPTS"
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_path,
+        '-vf', vf,
+        '-vsync', 'cfr',
+        '-c:v', 'libx264', '-c:a', 'aac',
+        output_path
+    ]
+    if verbose:
+        print(f"Cutting frames {start_frame}-{end_frame} ({num_frames} frames) -> {output_path}")
+    try:
+        subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = f"ffmpeg failed with return code {e.returncode}"
+        if e.stderr:
+            error_msg += f"\n{e.stderr}"
+        raise RuntimeError(error_msg)
+    except FileNotFoundError:
+        raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
+    if verbose:
+        try:
+            out_info = get_video_info(output_path)
+            print(f"  Cut video: {out_info['num_frames']} frames")
+        except Exception as e:
+            print(f"  Cut video: (could not verify frame count: {e})")
+    return True
+
 
 def seconds_to_time_str(seconds: float) -> str:
     """Convert seconds to HH:MM:SS.mmm format."""
@@ -176,83 +258,53 @@ def seconds_to_time_str(seconds: float) -> str:
 def split_video_into_segments(
     video_path: str,
     output_dir: str,
-    segment_duration: float = 20.0,
-    max_segments: int = 6,
-    copy_codec: bool = True,
+    frames_per_segment: int = 1200,
     verbose: bool = True,
 ) -> list:
     """
-    Split a video into fixed-duration segments.
+    Split a video into segments by exact frame count. Each frame appears exactly once.
+    Uses ffprobe -count_frames for accurate frame count and ffmpeg select filter for
+    frame-accurate extraction.
     
     Args:
         video_path: Path to input video
         output_dir: Directory to save segments
-        segment_duration: Duration of each segment in seconds (default: 20)
-        max_segments: Maximum number of segments. The last segment will contain
-                      all remaining frames if this limit is reached (default: 6)
-        copy_codec: If True, copy streams without re-encoding
+        frames_per_segment: Frames per segment (default: 1200). Last segment gets remainder.
         verbose: Print progress
     
     Returns:
         List of output file paths
     """
-    # Get video info
-    info = get_video_info(video_path)
-    total_duration = info['duration']
+    if verbose:
+        print(f"\nSplitting: {video_path}")
+    info = get_video_info(video_path, use_count_frames=True)
+    total_frames = info['num_frames']
+    if verbose:
+        print(f"Original video: {total_frames} frames (count_frames)")
     
-    # Get video filename without extension
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     video_ext = os.path.splitext(video_path)[1]
-    
-    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Calculate number of segments (capped at max_segments)
-    # If we would exceed max_segments, the last segment gets all remaining frames
-    num_segments = int(total_duration // segment_duration)
-    remainder = total_duration % segment_duration
-    if remainder > 0:
-        num_segments += 1
-    
-    # Cap at max_segments
-    num_segments = min(num_segments, max_segments)
-    
-    if verbose:
-        print(f"\nSplitting video: {video_path}")
-        print(f"  Total duration: {total_duration:.2f}s")
-        print(f"  Segment duration: {segment_duration}s (last segment may be longer)")
-        print(f"  Number of segments: {num_segments} (max: {max_segments})")
-        print(f"  Output directory: {output_dir}")
+    num_segments = (total_frames + frames_per_segment - 1) // frames_per_segment
     
     output_files = []
-    
     for i in range(num_segments):
-        start_seconds = i * segment_duration
-        
-        # For the last segment, include all remaining frames
+        start_frame = i * frames_per_segment
         if i == num_segments - 1:
-            end_seconds = total_duration
+            num_frames = total_frames - start_frame
         else:
-            end_seconds = (i + 1) * segment_duration
-        
-        start_time = seconds_to_time_str(start_seconds)
-        end_time = seconds_to_time_str(end_seconds)
-        
-        # Output filename: original_name_seg001.ext
+            num_frames = frames_per_segment
+        if num_frames <= 0:
+            break
         output_filename = f"{video_name}_seg{i+1:03d}{video_ext}"
         output_path = os.path.join(output_dir, output_filename)
-        
-        if verbose and i == num_segments - 1:
-            actual_duration = end_seconds - start_seconds
-            print(f"  Last segment duration: {actual_duration:.2f}s")
-        
         try:
-            cut_video_segment(
+            cut_video_frames(
                 video_path=video_path,
-                start_time=start_time,
-                end_time=end_time,
+                start_frame=start_frame,
+                num_frames=num_frames,
                 output_path=output_path,
-                copy_codec=copy_codec,
                 verbose=verbose,
             )
             output_files.append(output_path)
@@ -268,37 +320,23 @@ def split_video_into_segments(
 def process_folder_videos(
     input_folder: str,
     output_base_dir: str = "./experiments/video_segs",
-    segment_duration: float = 20.0,
-    max_segments: int = 6,
+    frames_per_segment: int = 1200,
     video_extensions: list = None,
-    copy_codec: bool = True,
     verbose: bool = True,
 ) -> dict:
     """
-    Process all videos in a folder, splitting each into fixed-duration segments.
+    Process all videos in a folder, splitting each into fixed-frame segments.
+    Each frame appears exactly once. Uses ffprobe -count_frames and re-encodes.
     
     Args:
         input_folder: Path to folder containing videos
         output_base_dir: Base directory for output (default: ./experiments/video_segs)
-        segment_duration: Duration of each segment in seconds (default: 20)
-        max_segments: Maximum number of segments per video. The last segment will
-                      contain all remaining frames if this limit is reached (default: 6)
+        frames_per_segment: Frames per segment (default: 1200)
         video_extensions: List of video extensions to process (default: common formats)
-        copy_codec: If True, copy streams without re-encoding
         verbose: Print progress
     
     Returns:
         Dictionary mapping input video paths to lists of output segment paths
-    
-    Output structure:
-        <output_base_dir>/
-            <video1_name>/
-                video1_name_seg001.mp4
-                video1_name_seg002.mp4
-                ...
-            <video2_name>/
-                video2_name_seg001.mp4
-                ...
     """
     if video_extensions is None:
         video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v', '.MP4', '.AVI', '.MOV']
@@ -319,7 +357,7 @@ def process_folder_videos(
     print(f"\n{'='*60}")
     print(f"Processing {len(video_files)} video(s) from: {input_folder}")
     print(f"Output directory: {output_base_dir}")
-    print(f"Segment duration: {segment_duration}s (max {max_segments} segments)")
+    print(f"Frames per segment: {frames_per_segment}")
     print(f"{'='*60}")
     
     # Create base output directory
@@ -339,9 +377,7 @@ def process_folder_videos(
             segments = split_video_into_segments(
                 video_path=video_path,
                 output_dir=video_output_dir,
-                segment_duration=segment_duration,
-                max_segments=max_segments,
-                copy_codec=copy_codec,
+                frames_per_segment=frames_per_segment,
                 verbose=verbose,
             )
             results[video_path] = segments
@@ -380,11 +416,11 @@ Examples:
   # With milliseconds
   python video_cut.py -i input.mp4 -s 00:01:30.500 -e 00:02:45.750 -o output.mp4
 
-  # Process all videos in a folder (split into 20s segments, max 6 segments)
+  # Process all videos in a folder (1200 frames per segment, max 6 segments)
   python video_cut.py --folder /path/to/videos
   
-  # Process folder with custom segment duration, max segments, and output directory
-  python video_cut.py --folder /path/to/videos --segment-duration 30 --max-segments 10 --output-dir ./my_segments
+  # Process folder with custom frames per segment
+  python video_cut.py --folder /path/to/videos --frames-per-segment 600 --output-dir ./my_segments
         """
     )
     
@@ -404,10 +440,8 @@ Examples:
                         help='Output video file path - required for single cut')
     
     # Folder mode arguments
-    parser.add_argument('--segment-duration', type=float, default=20.0,
-                        help='Duration of each segment in seconds (default: 20)')
-    parser.add_argument('--max-segments', type=int, default=6,
-                        help='Maximum segments per video; last segment gets remaining frames (default: 6)')
+    parser.add_argument('--frames-per-segment', type=int, default=1200,
+                        help='Frames per segment; last segment gets remainder (default: 1200)')
     parser.add_argument('--output-dir', type=str, default='./experiments/video_segs',
                         help='Output directory for segments (default: ./experiments/video_segs)')
     
@@ -425,9 +459,7 @@ Examples:
             process_folder_videos(
                 input_folder=args.folder,
                 output_base_dir=args.output_dir,
-                segment_duration=args.segment_duration,
-                max_segments=args.max_segments,
-                copy_codec=not args.no_copy,
+                frames_per_segment=args.frames_per_segment,
                 verbose=not args.quiet,
             )
         else:
