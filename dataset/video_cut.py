@@ -218,7 +218,8 @@ def cut_video_frames(
         '-i', video_path,
         '-vf', vf,
         '-vsync', 'cfr',
-        '-c:v', 'libx264', '-c:a', 'aac',
+        '-c:v', 'libx264',
+        '-an',  # drop audio — select filter only applies to video
         output_path
     ]
     if verbose:
