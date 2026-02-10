@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import gc
 import glob
 import os
 import re
@@ -209,6 +210,11 @@ def main():
         default=1800,
         help="Maximum number of frames to track per segment",
     )
+    parser.add_argument(
+        "--offload-to-cpu",
+        action="store_true",
+        help="Offload video frames and state to CPU to reduce GPU memory (slower)",
+    )
     args = parser.parse_args()
 
     # Resolve config
@@ -300,7 +306,11 @@ def main():
 
         # Init inference state for this segment
         print("[INFO]   Initializing SAM-3 inference state...")
-        inference_state = predictor.init_state(video_path=seg_path)
+        inference_state = predictor.init_state(
+            video_path=seg_path,
+            offload_video_to_cpu=args.offload_to_cpu,
+            offload_state_to_cpu=args.offload_to_cpu,
+        )
         predictor.clear_all_points_in_video(inference_state)
 
         # Add box prompts (at local frame 0) using bboxes from pkl
@@ -343,6 +353,13 @@ def main():
         all_vis_frames.extend(vis_frames)
 
         print(f"[INFO]   Saved {num_saved} frames for segment {seg_idx}.")
+
+        # Free GPU memory before loading next segment
+        del inference_state
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         cumulative_frame_offset += seg_total_frames
 
     # Save combined visualization video
