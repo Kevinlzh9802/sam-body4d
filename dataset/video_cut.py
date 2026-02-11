@@ -2,6 +2,9 @@ import subprocess
 import json
 import os
 
+import cv2
+import numpy as np
+
 def get_video_info(video_path, use_count_frames: bool = False):
     """
     Get video information using ffprobe.
@@ -247,6 +250,34 @@ def cut_video_frames(
     return True
 
 
+def extract_first_frame(video_path: str, output_path: str, verbose: bool = True) -> np.ndarray:
+    """
+    Extract the first frame from a video and save it as an image.
+    Uses OpenCV (same approach as dataset/video_extract.py).
+    
+    Args:
+        video_path: Path to input video
+        output_path: Path to output image (e.g. .jpg or .png)
+        verbose: Print progress
+    
+    Returns:
+        The frame as a numpy array (BGR), or None if read failed
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    cap = cv2.VideoCapture(video_path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret or frame is None:
+        raise RuntimeError(f"Could not read first frame from {video_path}")
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    cv2.imwrite(output_path, frame)
+    if verbose:
+        print(f"  Extracted first frame: {output_path}")
+    return frame
+
+
 def seconds_to_time_str(seconds: float) -> str:
     """Convert seconds to HH:MM:SS.mmm format."""
     hours = int(seconds // 3600)
@@ -264,16 +295,17 @@ def split_video_into_segments(
     """
     Split a video into segments by exact frame count. Each frame appears exactly once.
     Uses ffprobe -count_frames for accurate frame count and ffmpeg select filter for
-    frame-accurate extraction.
+    frame-accurate extraction. Also extracts the first frame of each segment as a .jpg
+    (e.g. video_name_seg001_frame0.jpg).
     
     Args:
         video_path: Path to input video
-        output_dir: Directory to save segments
+        output_dir: Directory to save segments (and first-frame images)
         frames_per_segment: Frames per segment (default: 1200). Last segment gets remainder.
         verbose: Print progress
     
     Returns:
-        List of output file paths
+        List of output video file paths
     """
     if verbose:
         print(f"\nSplitting: {video_path}")
@@ -308,6 +340,17 @@ def split_video_into_segments(
                 verbose=verbose,
             )
             output_files.append(output_path)
+            # Extract first frame of this segment
+            frame_filename = f"{video_name}_seg{i+1:03d}_frame0.jpg"
+            frame_path = os.path.join(output_dir, frame_filename)
+            try:
+                extract_first_frame(
+                    video_path=output_path,
+                    output_path=frame_path,
+                    verbose=verbose,
+                )
+            except Exception as e:
+                print(f"  Error extracting first frame for segment {i+1}: {e}")
         except Exception as e:
             print(f"  Error cutting segment {i+1}: {e}")
     
