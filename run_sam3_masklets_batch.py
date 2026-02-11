@@ -2,25 +2,35 @@
 """
 Batch SAM-3 masklet extraction over all video segments in a folder.
 
-Expected input folder layout (folder name is a 3-digit number):
+Expected input folder layout:
   <input_folder>/            e.g. /mnt/data/.../428/
-    428_seg000.mp4
     428_seg001.mp4
     428_seg002.mp4
     ...
+    detections.json
 
-The folder name (e.g. "428") is used as the pickle file name for loading
-bboxes/keypoints from <bbox_pkl_dir>/428.pkl.
+Initial bboxes are read from detections.json (directly under the input folder).
+JSON format:
+  {
+    "images": [
+      {
+        "image": "428_seg001_frame0.jpg",
+        "bboxes": [
+          { "temporal_id": 0, "real_id": 1, "x": 120.5, "y": 80.32, "w": 45.2, "h": 38.1, "score": 0.92 },
+          ...
+        ]
+      },
+      ...
+    ]
+  }
 
-The pickle is indexed by **absolute frame number** across the entire long
-video.  For each segment we look up the bboxes at the cumulative frame
-offset (i.e. frame 0 for seg000, frame N0 for seg001, frame N0+N1 for
-seg002, ...).
+Each "image" field corresponds to the first frame of a segment (e.g. 428_seg001_frame0.jpg
+→ 428_seg001.mp4). Bboxes use "real_id" as person PID; x,y,w,h in pixels. The script
+builds consecutive IDs for tracking and maps back to real_id in outputs.
 
 Usage:
   python run_sam3_masklets_batch.py \\
       --input-folder /mnt/data/sam4d_body/inputs/videos/428 \\
-      --bbox-pkl-dir /mnt/data/sam4d_body/inputs/bboxes_kps_refined \\
       --output /mnt/data/sam4d_body/outputs/exp_XXX/masklets \\
       --config configs/body4d.yaml
 """
@@ -28,10 +38,10 @@ Usage:
 import argparse
 import gc
 import glob
+import json
 import os
-import re
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import cv2
 import numpy as np
@@ -42,7 +52,6 @@ from PIL import Image
 from tqdm import tqdm
 
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
-from utils.image_utils import load_bbox_kp
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 from utils.mask_bbox import extract_bboxes_from_masks
 
@@ -172,6 +181,78 @@ def _extract_folder_name(input_folder: str) -> str:
     return os.path.basename(os.path.normpath(input_folder))
 
 
+def _segment_key_from_path(seg_path: str) -> str:
+    """
+    Return segment key from segment path (e.g. .../428_seg001.mp4 -> 428_seg001).
+    """
+    return os.path.splitext(os.path.basename(seg_path))[0]
+
+
+def load_detections_json(
+    input_folder: str,
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[int, int], Dict[int, int]]:
+    """
+    Load detections.json from input_folder and build:
+    - detections_by_segment: segment_key -> list of bbox dicts (real_id, x, y, w, h, ...)
+    - consecutive_to_actual, actual_to_consecutive: ID mapping from all unique real_ids
+
+    Image filename in JSON must match segment first frame (e.g. 428_seg001_frame0.jpg
+    for segment 428_seg001.mp4). Segment key is derived by stripping _frame0.* from image.
+    """
+    path = os.path.join(input_folder, "detections.json")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"detections.json not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    images = data.get("images", [])
+    if not images:
+        raise ValueError("detections.json has no 'images' array")
+
+    detections_by_segment: Dict[str, List[Dict[str, Any]]] = {}
+    all_real_ids = set()
+
+    for entry in images:
+        image_name = entry.get("image", "")
+        if not image_name:
+            continue
+        # 428_seg001_frame0.jpg -> 428_seg001
+        base = os.path.splitext(image_name)[0]
+        if not base.endswith("_frame0"):
+            continue
+        segment_key = base[: -len("_frame0")]
+        bboxes = entry.get("bboxes", [])
+        detections_by_segment[segment_key] = bboxes
+        for b in bboxes:
+            rid = b.get("real_id")
+            if rid is not None:
+                all_real_ids.add(int(rid))
+
+    # Build consecutive <-> actual ID mapping (sorted for stable ordering)
+    sorted_real = sorted(all_real_ids)
+    consecutive_to_actual: Dict[int, int] = {}
+    actual_to_consecutive: Dict[int, int] = {}
+    for i, rid in enumerate(sorted_real):
+        cid = i + 1
+        consecutive_to_actual[cid] = rid
+        actual_to_consecutive[rid] = cid
+
+    return detections_by_segment, consecutive_to_actual, actual_to_consecutive
+
+
+def bbox_xywh_to_rel(bbox_xywh: List[float], width: int, height: int) -> np.ndarray:
+    """Convert [x, y, w, h] in pixels to relative [x1, y1, x2, y2] for SAM."""
+    x, y, w, h = bbox_xywh
+    x1, y1 = x, y
+    x2, y2 = x + w, y + h
+    rel = np.array(
+        [x1 / width, y1 / height, x2 / width, y2 / height],
+        dtype=np.float32,
+    )
+    return rel
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -184,13 +265,7 @@ def main():
         "--input-folder",
         type=str,
         required=True,
-        help="Folder containing video segments (e.g. .../428/ with 428_seg000.mp4 ...)",
-    )
-    parser.add_argument(
-        "--bbox-pkl-dir",
-        type=str,
-        required=True,
-        help="Directory containing bbox/kp pickle files (e.g. .../bboxes_kps_refined/)",
+        help="Folder containing video segments and detections.json (e.g. .../428/)",
     )
     parser.add_argument(
         "--config",
@@ -226,12 +301,19 @@ def main():
     # Discover segments
     input_folder = args.input_folder
     folder_name = _extract_folder_name(input_folder)
-    print(f"[INFO] Folder name (pkl key): {folder_name}")
+    print(f"[INFO] Folder name: {folder_name}")
 
     segment_paths = _discover_segments(input_folder)
     print(f"[INFO] Found {len(segment_paths)} segment(s):")
     for sp in segment_paths:
         print(f"  {sp}")
+
+    # Load detections.json (bboxes per segment)
+    print(f"[INFO] Loading detections from: {os.path.join(input_folder, 'detections.json')}")
+    detections_by_segment, consecutive_to_actual, actual_to_consecutive = load_detections_json(
+        input_folder
+    )
+    print(f"[INFO] Detections for {len(detections_by_segment)} segment(s), ID mapping: {consecutive_to_actual}")
 
     # Output dir
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -243,15 +325,6 @@ def main():
         output_dir = args.output
     os.makedirs(output_dir, exist_ok=True)
     print(f"[INFO] Output directory: {output_dir}")
-
-    # Load bbox pickle (entire long video)
-    print(f"[INFO] Loading bbox/kp pickle from: {args.bbox_pkl_dir}/{folder_name}.pkl")
-    bboxes_kps_data = load_bbox_kp(args.bbox_pkl_dir, folder_name)
-    if bboxes_kps_data is None:
-        raise RuntimeError(
-            f"Failed to load bbox/kp pickle: {args.bbox_pkl_dir}/{folder_name}.pkl"
-        )
-    print(f"[INFO] Pickle contains {len(bboxes_kps_data)} frame entries.")
 
     # Read first segment to get video dimensions (assumed same for all segments)
     fps, _, width, height = read_video_metadata(segment_paths[0])
@@ -265,44 +338,26 @@ def main():
 
     cuda_reset_peak_memory_stats()
 
-    # Build ID mapping from the first frame of the pickle
-    # (person IDs / bboxes are assumed consistent across frames)
-    pid_list = bboxes_kps_data[0]["pids"]
-    num_persons = len(pid_list)
-    consecutive_to_actual: Dict[int, int] = {}
-    actual_to_consecutive: Dict[int, int] = {}
-    for i, pid in enumerate(pid_list):
-        consecutive_id = i + 1
-        actual_pid = int(pid)
-        consecutive_to_actual[consecutive_id] = actual_pid
-        actual_to_consecutive[actual_pid] = consecutive_id
-    print(f"[INFO] {num_persons} person(s), ID mapping: {consecutive_to_actual}")
-
     # Process segments sequentially
     cumulative_frame_offset = 0
     all_vis_frames: List[np.ndarray] = []
 
     for seg_idx, seg_path in enumerate(segment_paths):
         seg_name = os.path.basename(seg_path)
+        segment_key = _segment_key_from_path(seg_path)
         _, seg_total_frames, seg_w, seg_h = read_video_metadata(seg_path)
         print(f"\n{'='*60}")
         print(f"[INFO] Segment {seg_idx}: {seg_name}")
         print(f"[INFO]   frames: {seg_total_frames}, cumulative offset: {cumulative_frame_offset}")
-        print(f"[INFO]   using bbox frame index: {cumulative_frame_offset}")
 
-        # Look up bboxes at the absolute frame offset
-        pkl_frame_idx = cumulative_frame_offset
-        if pkl_frame_idx >= len(bboxes_kps_data):
+        # Look up bboxes from detections.json for this segment
+        seg_bbox_entries = detections_by_segment.get(segment_key)
+        if not seg_bbox_entries:
             print(
-                f"[WARN] Pickle has no entry for frame {pkl_frame_idx} "
-                f"(only {len(bboxes_kps_data)} entries). Skipping segment."
+                f"[WARN] No detections for segment key '{segment_key}' in detections.json. Skipping segment."
             )
             cumulative_frame_offset += seg_total_frames
             continue
-
-        frame_rec = bboxes_kps_data[pkl_frame_idx]
-        seg_bboxes = np.asarray(frame_rec["bboxes"], dtype=np.float32)
-        seg_pids = frame_rec["pids"]
 
         # Init inference state for this segment
         print("[INFO]   Initializing SAM-3 inference state...")
@@ -313,22 +368,25 @@ def main():
         )
         predictor.clear_all_points_in_video(inference_state)
 
-        # Add box prompts (at local frame 0) using bboxes from pkl
+        # Add box prompts (at local frame 0) using bboxes from JSON (real_id, x, y, w, h)
         out_obj_ids: List[int] = []
-        for bbox_idx in range(len(seg_bboxes)):
-            actual_pid = int(seg_pids[bbox_idx])
+        for bbox_entry in seg_bbox_entries:
+            actual_pid = int(bbox_entry.get("real_id", 0))
             consecutive_id = actual_to_consecutive.get(actual_pid)
             if consecutive_id is None:
-                # New person appeared in later frame — extend mapping
+                # New person not in initial mapping — extend mapping
                 consecutive_id = max(consecutive_to_actual.keys(), default=0) + 1
                 consecutive_to_actual[consecutive_id] = actual_pid
                 actual_to_consecutive[actual_pid] = consecutive_id
 
-            bbox = seg_bboxes[bbox_idx]
-            rel_box = bbox / np.array([seg_w, seg_h, seg_w, seg_h], dtype=np.float32)
+            x = float(bbox_entry.get("x", 0))
+            y = float(bbox_entry.get("y", 0))
+            w = float(bbox_entry.get("w", 0))
+            h = float(bbox_entry.get("h", 0))
+            rel_box = bbox_xywh_to_rel([x, y, w, h], seg_w, seg_h)
             print(
                 f"  Consecutive ID {consecutive_id} (actual PID {actual_pid}) "
-                f"at local frame 0 (global {pkl_frame_idx})"
+                f"at local frame 0 (global {cumulative_frame_offset})"
             )
             _, out_obj_ids, _, _ = predictor.add_new_points_or_box(
                 inference_state=inference_state,
@@ -388,9 +446,11 @@ def main():
     print(f"[INFO] Saved ID mapping to: {id_mapping_path}")
 
     # Save metadata
+    detections_path = os.path.join(input_folder, "detections.json")
     meta = {
         "input_folder": os.path.abspath(input_folder),
         "folder_name": folder_name,
+        "detections_path": os.path.abspath(detections_path),
         "config_path": os.path.abspath(cfg_path),
         "output_dir": os.path.abspath(output_dir),
         "fps": fps,
