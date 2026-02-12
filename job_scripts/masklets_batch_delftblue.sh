@@ -28,7 +28,6 @@
 #
 # Defaults (container paths):
 #   --input-folder  /mnt/data/conflab/video_segs/<NUM>
-#   --bbox-pkl-dir  /mnt/data/sam4d_body/inputs/bboxes_kps_refined
 #   --output        /mnt/data/conflab/bbox_kp/<NUM>
 #   --config        configs/body4d.yaml
 
@@ -133,10 +132,10 @@ else
   project_folder="$bind_home_path/projects/sam-body4d"
 fi
 
-bbox_pkl_dir_container="$bind_data_path_sam4d/inputs/bboxes_kps_refined"
+# bbox_pkl_dir_container="$bind_data_path_sam4d/inputs/bboxes_kps_refined"
 
 echo "[INFO] project_folder=$project_folder"
-echo "[INFO] bbox_pkl_dir=$bbox_pkl_dir_container"
+# echo "[INFO] bbox_pkl_dir=$bbox_pkl_dir_container"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -171,7 +170,6 @@ for VIDEO_NUM in "${video_nums[@]}"; do
     $sif_path \
     python $project_folder/run_sam3_masklets_batch.py \
       --input-folder "$video_input_folder_container" \
-      --bbox-pkl-dir "$bbox_pkl_dir_container" \
       --config ${CONFIG_REL:-configs/body4d.yaml} \
       --output "$output_container" ; then
     echo "[INFO] [$idx/$total] VIDEO_NUM=$VIDEO_NUM completed successfully."
