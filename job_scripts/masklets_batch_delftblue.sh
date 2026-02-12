@@ -152,7 +152,7 @@ for VIDEO_NUM in "${video_nums[@]}"; do
   echo "[INFO] [$idx/$total] Processing VIDEO_NUM=$VIDEO_NUM"
   echo "=================================================================="
 
-  video_input_folder_container="$bind_data_path_conflab/video_segs/$VIDEO_NUM"
+  video_input_folder_container="$bind_data_path_conflab/video_segs_20s/$VIDEO_NUM"
   output_container="$bind_data_path_conflab/bbox_kp/$VIDEO_NUM"
 
   # Ensure output dir exists on host
