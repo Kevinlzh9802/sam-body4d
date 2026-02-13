@@ -135,10 +135,13 @@ def optimize_ground_plane_translation(
             c_pair = (c[1:] * c[:-1])
             l_slide = (c_pair * (v * v).sum(dim=1)).sum() / (c_pair.sum() + 1e-6)
 
-        # Smoothness + prior
-        l_prior = ((t - t0) ** 2).sum(dim=-1).mean()
+        # Smoothness + prior — scale to world units so that lambdas are
+        # comparable to l_plane / l_slide (which are already in world-unit²).
+        # Without this, prior/vel losses are in meters² while plane/slide are
+        # in cm², making the regularisation ~world_scale² ≈ 10 000× too weak.
+        l_prior = (((t - t0) * world_scale) ** 2).sum(dim=-1).mean()
         if T > 1:
-            v = t[1:] - t[:-1]
+            v = (t[1:] - t[:-1]) * world_scale
             l_vel = (v * v).sum(dim=-1).mean()
         else:
             l_vel = t.sum() * 0.0
