@@ -3,8 +3,8 @@
 #SBATCH --partition=gpu
 #SBATCH --time=6:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=8000M
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=4000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END
 #SBATCH --account=research-eemcs-insy
