@@ -15,11 +15,12 @@ set -euo pipefail
 #
 # Smoothing options (for --mode smooth):
 #   --no-option1              Disable built-in smoothing (EMA/Kalman + shape/scale freeze). Default: ON
-#   --enable-reproj           Enable 2D Reprojection Optimization. Default: OFF
+#   --no-mask-reproj          Disable mask-based reprojection optimization. Default: ON (uses Stage 1 masks)
+#   --enable-kps-reproj       Enable legacy keypoint-based reprojection (requires --bbox-kps-pkl). Default: OFF
 #   --enable-ground           Enable Ground-Plane / Contact Optimization. Default: OFF
-#   --bbox-kps-pkl <path>     Path to bboxes_kps pickle (required for --enable-reproj)
-#   --camera-intrinsics-json <path>  Path to camera intrinsics JSON (required for --enable-reproj)
+#   --camera-intrinsics-json <path>  Path to camera intrinsics JSON (required for mask reproj and kps reproj)
 #   --camera-scale <float>    Camera scale factor (default: 0.5)
+#   --bbox-kps-pkl <path>     Path to bboxes_kps pickle (required for --enable-kps-reproj)
 #   --extrinsics-json <path>  Path to camera extrinsics JSON (required for --enable-ground and world-space export)
 #   --export-camera-space     Export meshes in camera coordinates instead of world space (default is world space)
 #   --world-scale <float>     Scale factor to convert SMPL-X meters to extrinsic units (default: 100.0 for cm)
@@ -29,22 +30,31 @@ set -euo pipefail
 #       and will be automatically translated to container paths (/mnt/data/sam4d_body/...).
 #
 # Examples:
-#   # Smooth with all defaults (Option1 ON, Option2 OFF, Option3 OFF)
-#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX
-#
-#   # Smooth with 2D reprojection enabled (requires bbox and intrinsics paths)
+#   # Smooth with all defaults (Option1 ON, Mask Reproj ON, Kps Reproj OFF, Ground OFF)
+#   # NOTE: Mask reproj requires --camera-intrinsics-json; auto-uses masks from <exp>/masklets/masks/
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
-#     --enable-reproj \
+#     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json
+#
+#   # Smooth with mask reproj disabled (no 2D optimization)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --no-mask-reproj
+#
+#   # Smooth with legacy keypoint-based reprojection (requires bbox and intrinsics paths)
+#   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --no-mask-reproj \
+#     --enable-kps-reproj \
 #     --bbox-kps-pkl /scratch/zli33/data/sam4d/inputs/bboxes_kps_refined/428.pkl \
 #     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json
 #
 #   # Smooth with ground-plane optimization (exports in world space by default)
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json \
 #     --enable-ground \
 #     --extrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/extrinsics-camera-04.json
 #
 #   # Smooth with ground optimization but export in camera space (legacy behavior)
 #   bash job_scripts/submit_inference_delftblue_snapshot.sh --mode smooth --input /scratch/.../exp_XXXX \
+#     --camera-intrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/parameters-camera-04.json \
 #     --enable-ground \
 #     --extrinsics-json /scratch/zli33/data/sam4d/inputs/camera_params_new/extrinsics-camera-04.json \
 #     --export-camera-space
@@ -76,10 +86,12 @@ use_live_code="0"
 
 # Smoothing options (for --mode smooth)
 # Option 1: Built-in smoothing (EMA/Kalman + shape/scale freeze) - default ON
-# Option 2: 2D Reprojection Optimization - default OFF
-# Option 3: Ground-Plane / Contact Optimization - default OFF
+# Mask Reproj: Mask-based reprojection optimization - default ON (uses Stage 1 masks)
+# Kps Reproj: Legacy keypoint-based reprojection - default OFF
+# Ground: Ground-Plane / Contact Optimization - default OFF
 smooth_no_option1=""
-smooth_enable_reproj=""
+smooth_no_mask_reproj=""
+smooth_enable_kps_reproj=""
 smooth_enable_ground=""
 # Reproj/Ground inputs (host paths - will be translated to container paths)
 bbox_kps_pkl_host=""
@@ -122,8 +134,12 @@ while [[ $# -gt 0 ]]; do
       smooth_no_option1="1"
       shift
       ;;
-    --enable-reproj|--reproj)
-      smooth_enable_reproj="1"
+    --no-mask-reproj)
+      smooth_no_mask_reproj="1"
+      shift
+      ;;
+    --enable-kps-reproj|--kps-reproj)
+      smooth_enable_kps_reproj="1"
       shift
       ;;
     --enable-ground|--ground)
@@ -320,25 +336,40 @@ PY
     else
       echo "[INFO] Smoothing: Option1 (built-in) enabled (default)"
     fi
-    if [ -n "${smooth_enable_reproj:-}" ]; then
-      smooth_opts="$smooth_opts,ENABLE_REPROJ=1"
-      echo "[INFO] Smoothing: Option2 (2D Reprojection) ENABLED"
+    
+    # Mask-based reprojection (default ON) - uses Stage 1 masks from <exp>/masklets/masks/
+    if [ -n "${smooth_no_mask_reproj:-}" ]; then
+      smooth_opts="$smooth_opts,NO_MASK_REPROJ=1"
+      echo "[INFO] Smoothing: Mask Reprojection DISABLED"
+    else
+      echo "[INFO] Smoothing: Mask Reprojection enabled (default)"
+      # Mask reproj requires camera intrinsics
+      if [ -z "${camera_intrinsics_json_host:-}" ]; then
+        echo "[WARN] Mask reproj requires --camera-intrinsics-json. Will be disabled at runtime if missing."
+      fi
+    fi
+    
+    # Legacy keypoint-based reprojection (default OFF)
+    if [ -n "${smooth_enable_kps_reproj:-}" ]; then
+      smooth_opts="$smooth_opts,ENABLE_KPS_REPROJ=1"
+      echo "[INFO] Smoothing: Legacy Keypoint Reprojection ENABLED"
       
-      # Validate required inputs for reproj
+      # Validate required inputs for kps reproj
       if [ -z "${bbox_kps_pkl_host:-}" ]; then
-        echo "[ERROR] --enable-reproj requires --bbox-kps-pkl <path>" >&2
+        echo "[ERROR] --enable-kps-reproj requires --bbox-kps-pkl <path>" >&2
         exit 2
       fi
       if [ -z "${camera_intrinsics_json_host:-}" ]; then
-        echo "[ERROR] --enable-reproj requires --camera-intrinsics-json <path>" >&2
+        echo "[ERROR] --enable-kps-reproj requires --camera-intrinsics-json <path>" >&2
         exit 2
       fi
     else
-      echo "[INFO] Smoothing: Option2 (2D Reprojection) disabled (default)"
+      echo "[INFO] Smoothing: Legacy Keypoint Reprojection disabled (default)"
     fi
+    
     if [ -n "${smooth_enable_ground:-}" ]; then
       smooth_opts="$smooth_opts,ENABLE_GROUND=1"
-      echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) ENABLED"
+      echo "[INFO] Smoothing: Ground-Plane/Contact ENABLED"
       
       # Validate required inputs for ground-plane optimization
       if [ -z "${extrinsics_json_host:-}" ]; then
@@ -346,7 +377,7 @@ PY
         exit 2
       fi
     else
-      echo "[INFO] Smoothing: Option3 (Ground-Plane/Contact) disabled (default)"
+      echo "[INFO] Smoothing: Ground-Plane/Contact disabled (default)"
     fi
     
     # Add reproj/ground input paths (translate host -> container paths)

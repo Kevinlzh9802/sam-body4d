@@ -97,11 +97,19 @@ apptainer exec --nv \
     --config ${CONFIG_REL:-configs/body4d.yaml} \
     --out "$out_dir_container" \
     ${NO_OPTION1:+--no-option1} \
-    ${ENABLE_REPROJ:+--enable-reproj} \
+    ${NO_MASK_REPROJ:+--no-mask-reproj} \
+    ${ENABLE_KPS_REPROJ:+--enable-kps-reproj} \
     ${ENABLE_GROUND:+--enable-ground} \
-    ${BBOX_KPS_PKL:+--bbox-kps-pkl "$BBOX_KPS_PKL"} \
     ${CAMERA_INTRINSICS_JSON:+--camera-intrinsics-json "$CAMERA_INTRINSICS_JSON"} \
     ${CAMERA_SCALE:+--camera-scale "$CAMERA_SCALE"} \
+    ${MASK_REPROJ_ITERS:+--mask-reproj-iters "$MASK_REPROJ_ITERS"} \
+    ${MASK_REPROJ_LR:+--mask-reproj-lr "$MASK_REPROJ_LR"} \
+    ${MASK_REPROJ_LAMBDA_VERTEX:+--mask-reproj-lambda-vertex "$MASK_REPROJ_LAMBDA_VERTEX"} \
+    ${MASK_REPROJ_LAMBDA_COVERAGE:+--mask-reproj-lambda-coverage "$MASK_REPROJ_LAMBDA_COVERAGE"} \
+    ${MASK_REPROJ_LAMBDA_PRIOR:+--mask-reproj-lambda-prior "$MASK_REPROJ_LAMBDA_PRIOR"} \
+    ${MASK_REPROJ_LAMBDA_VEL:+--mask-reproj-lambda-vel "$MASK_REPROJ_LAMBDA_VEL"} \
+    ${MASK_REPROJ_NUM_VERTS:+--mask-reproj-num-verts "$MASK_REPROJ_NUM_VERTS"} \
+    ${BBOX_KPS_PKL:+--bbox-kps-pkl "$BBOX_KPS_PKL"} \
     ${REPROJ_ITERS:+--reproj-iters "$REPROJ_ITERS"} \
     ${REPROJ_LR:+--reproj-lr "$REPROJ_LR"} \
     ${REPROJ_HUBER_DELTA:+--reproj-huber-delta "$REPROJ_HUBER_DELTA"} \

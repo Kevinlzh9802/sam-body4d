@@ -54,6 +54,7 @@ from smoothing.feet_z_plot import plot_feet_z_from_stage3
 from smoothing.projection_2d_plot import plot_2d_projections_from_stage3
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.ground_plane_opt import GroundOptConfig
+from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 
@@ -87,10 +88,25 @@ def main() -> None:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", choices=["cuda", "cpu"])
     # Option selection
     parser.add_argument("--no-option1", action="store_true", help="Disable built-in Option1 smoothing (EMA/Kalman + shape/scale freeze).")
-    parser.add_argument("--enable-reproj", action="store_true", help="Enable Option2 robust 2D reprojection optimization (adjust pred_cam_t).")
     parser.add_argument("--enable-ground", action="store_true", help="Enable ground-plane/contact optimization (adjust pred_cam_t in world coords).")
-
-    # Reprojection inputs/knobs
+    
+    # Mask-based reprojection (default ON) - uses Stage 1 masks
+    parser.add_argument("--no-mask-reproj", action="store_true", 
+                        help="Disable mask-based reprojection optimization. Default: ON (uses Stage 1 masks).")
+    parser.add_argument("--mask-reproj-iters", type=int, default=150)
+    parser.add_argument("--mask-reproj-lr", type=float, default=0.02)
+    parser.add_argument("--mask-reproj-lambda-vertex", type=float, default=1.0,
+                        help="Weight for vertex-in-mask loss")
+    parser.add_argument("--mask-reproj-lambda-coverage", type=float, default=0.5,
+                        help="Weight for mask coverage loss")
+    parser.add_argument("--mask-reproj-lambda-prior", type=float, default=0.1)
+    parser.add_argument("--mask-reproj-lambda-vel", type=float, default=0.5)
+    parser.add_argument("--mask-reproj-num-verts", type=int, default=500,
+                        help="Number of vertices to sample for mask reproj (0 = use all)")
+    
+    # Legacy keypoint-based reprojection (default OFF) - requires external bbox/kps pkl
+    parser.add_argument("--enable-kps-reproj", action="store_true", 
+                        help="Enable legacy keypoint-based reprojection (requires --bbox-kps-pkl). Default: OFF.")
     parser.add_argument("--bbox-kps-pkl", default=None, help="bboxes_kps_data pickle (observed 2D kps with kp_idx in mhr70).")
     parser.add_argument("--camera-intrinsics-json", default=None, help="Camera intrinsics json (scaled by --camera-scale).")
     parser.add_argument("--camera-scale", type=float, default=0.5)
@@ -247,12 +263,45 @@ def main() -> None:
     verts[..., [1, 2]] *= -1
     j3d[..., [1, 2]] *= -1
 
-    # Option2 / ground: operate on pred_cam_t, using keypoints3d before translation.
-    if args.enable_reproj or args.enable_ground:
+    # Determine which optimizations to run
+    enable_mask_reproj = not args.no_mask_reproj
+    enable_kps_reproj = args.enable_kps_reproj
+    enable_ground = args.enable_ground
+
+    # Auto-detect mask directory from raw_mhr.pt path: <exp>/masklets/raw_mhr.pt -> <exp>/masklets/masks
+    raw_parent = os.path.dirname(args.raw)  # e.g., <exp>/masklets
+    mask_dir = os.path.join(raw_parent, "masks")
+
+    # Validate required inputs for mask reproj
+    if enable_mask_reproj:
+        if not os.path.isdir(mask_dir):
+            print(f"[WARN] Mask directory not found: {mask_dir}")
+            print("[WARN] Disabling mask-based reprojection optimization.")
+            enable_mask_reproj = False
+        elif not args.camera_intrinsics_json:
+            print("[WARN] --camera-intrinsics-json is required for mask-based reprojection.")
+            print("[WARN] Disabling mask-based reprojection optimization.")
+            enable_mask_reproj = False
+
+    # Run post-optimizations if any enabled
+    if enable_mask_reproj or enable_kps_reproj or enable_ground:
         cfg3 = Stage3Config(
             enable_option1=(not args.no_option1),
-            enable_reproj=bool(args.enable_reproj),
-            enable_ground=bool(args.enable_ground),
+            enable_mask_reproj=enable_mask_reproj,
+            enable_kps_reproj=enable_kps_reproj,
+            enable_ground=enable_ground,
+            # Mask reproj config
+            mask_dir=mask_dir if enable_mask_reproj else None,
+            mask_reproj_cfg=MaskReprojOptConfig(
+                iters=int(args.mask_reproj_iters),
+                lr=float(args.mask_reproj_lr),
+                lambda_vertex_in_mask=float(args.mask_reproj_lambda_vertex),
+                lambda_mask_coverage=float(args.mask_reproj_lambda_coverage),
+                lambda_prior=float(args.mask_reproj_lambda_prior),
+                lambda_vel=float(args.mask_reproj_lambda_vel),
+                num_sample_vertices=int(args.mask_reproj_num_verts),
+            ),
+            # Legacy kps reproj config
             bbox_kps_pkl=args.bbox_kps_pkl,
             camera_intrinsics_json=args.camera_intrinsics_json,
             camera_scale=float(args.camera_scale),
@@ -265,6 +314,7 @@ def main() -> None:
                 lambda_accel=float(args.reproj_lambda_accel),
                 obs_scale_candidates=tuple(float(x) for x in args.obs_scale_cands),
             ),
+            # Ground config
             extrinsics_json=args.extrinsics_json,
             ground_cfg=GroundOptConfig(
                 iters=int(args.ground_iters),
@@ -280,6 +330,7 @@ def main() -> None:
         )
 
         # keypoints3d_local: (T*N,70,3) without translation; that's `j3d` here.
+        # vertices_local: (T*N,V,3) mesh vertices for mask reproj
         mhr, opt_summary = run_stage3_post_optimizations(
             cfg=cfg3,
             device=device,
@@ -289,6 +340,7 @@ def main() -> None:
             frame_obj_ids_slots=frame_obj_ids_slots,
             vis_flags=vis_flags,
             keypoints3d_local=j3d,
+            vertices_local=verts if enable_mask_reproj else None,
         )
 
         # Apply updated pred_cam_t to verts for export (do not change verts topology)

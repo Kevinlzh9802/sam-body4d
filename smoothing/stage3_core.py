@@ -13,15 +13,21 @@ from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_globa
 from .obs_kps import ObsKps, build_obj_id_to_bbox_idx, get_obs_for_person, load_bboxes_kps_pkl
 from .reproj_opt import ReprojOptConfig, optimize_pred_cam_t
 from .ground_plane_opt import GroundOptConfig, load_extrinsics_json, optimize_ground_plane_translation
+from .mask_reproj_opt import MaskReprojOptConfig, load_masks_for_sequence, optimize_mask_reprojection
 
 
 @dataclass
 class Stage3Config:
     enable_option1: bool = True
-    enable_reproj: bool = False
+    enable_mask_reproj: bool = True  # NEW: mask-based reproj (default ON)
+    enable_kps_reproj: bool = False  # Legacy keypoint-based reproj (default OFF)
     enable_ground: bool = False
 
-    # Reprojection inputs
+    # Mask reprojection inputs (uses Stage 1 masks)
+    mask_dir: Optional[str] = None  # Auto-detected from raw_mhr.pt path
+    mask_reproj_cfg: MaskReprojOptConfig = field(default_factory=MaskReprojOptConfig)
+
+    # Legacy keypoint reprojection inputs
     bbox_kps_pkl: Optional[str] = None
     camera_intrinsics_json: Optional[str] = None
     camera_scale: float = 0.5
@@ -181,24 +187,68 @@ def run_stage3_post_optimizations(
     vis_flags: Dict[int, List[int]],
     # required for recompute/projection
     keypoints3d_local: torch.Tensor,  # (T*N, 70, 3) after mhr_forward camera-axis flips, BEFORE adding pred_cam_t
+    vertices_local: Optional[torch.Tensor] = None,  # (T*N, V, 3) mesh vertices (for mask reproj)
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
     """
     Apply optional post-optimizations on top of base Option1 smoothing.
     Currently both optimizers adjust pred_cam_t only, and they are NOT mutually exclusive.
     They can be applied sequentially:
-      - reprojection (if enabled)
+      - mask reprojection (if enabled, default ON)
+      - legacy keypoint reprojection (if enabled)
       - ground-plane/contact (if enabled)
     """
-    summary: Dict[str, Any] = {"reproj": {}, "ground": {}}
+    summary: Dict[str, Any] = {"mask_reproj": {}, "kps_reproj": {}, "ground": {}}
     T = len(frame_names)
     N = len(obj_ids_all)
 
-    # Reprojection optimization
-    if cfg.enable_reproj:
+    # NEW: Mask-based reprojection optimization (default ON)
+    if cfg.enable_mask_reproj:
+        if not cfg.mask_dir:
+            raise ValueError("mask_dir is required for mask-based reprojection optimization.")
         if not cfg.camera_intrinsics_json:
-            raise ValueError("--camera-intrinsics-json is required for reprojection optimization.")
+            raise ValueError("--camera-intrinsics-json is required for mask-based reprojection optimization.")
+        if vertices_local is None:
+            raise ValueError("vertices_local is required for mask-based reprojection optimization.")
+
+        K_np, _dist = read_camera_intrinsics_new(cfg.camera_intrinsics_json)
+        K_np = adjust_K(K_np, scale=float(cfg.camera_scale))
+        K = torch.from_numpy(K_np).to(device=device, dtype=torch.float32)
+
+        # Load masks from Stage 1 output
+        print(f"[INFO] Loading masks from: {cfg.mask_dir}")
+        masks = load_masks_for_sequence(cfg.mask_dir, frame_names, device=device)
+        print(f"[INFO] Loaded {len(masks)} mask frames")
+
+        pred_cam_t = mhr["pred_cam_t"].view(T, N, 3).contiguous()
+        V = vertices_local.shape[1] if vertices_local.dim() == 3 else vertices_local.numel() // (T * N * 3)
+        verts_all = vertices_local.view(T, N, V, 3).contiguous()
+
+        for si, oid in enumerate(obj_ids_all):
+            present = torch.tensor([1 if frame_obj_ids_slots[t][si] == oid else 0 for t in range(T)], device=device)
+            if int(present.sum().item()) == 0:
+                continue
+
+            t0 = pred_cam_t[:, si, :]  # (T, 3)
+            V_person = verts_all[:, si, :, :]  # (T, V, 3)
+            t_opt, metrics = optimize_mask_reprojection(
+                K=K,
+                vertices_local=V_person,
+                t0=t0,
+                masks=masks,
+                obj_id=oid,
+                cfg=cfg.mask_reproj_cfg,
+            )
+            pred_cam_t[:, si, :] = t_opt
+            summary["mask_reproj"][str(oid)] = metrics
+
+        mhr["pred_cam_t"] = pred_cam_t.view(T * N, 3)
+
+    # Legacy keypoint-based reprojection optimization (default OFF)
+    if cfg.enable_kps_reproj:
+        if not cfg.camera_intrinsics_json:
+            raise ValueError("--camera-intrinsics-json is required for keypoint reprojection optimization.")
         if not cfg.bbox_kps_pkl:
-            raise ValueError("--bbox-kps-pkl is required for reprojection optimization.")
+            raise ValueError("--bbox-kps-pkl is required for keypoint reprojection optimization.")
 
         # K_np, _dist = read_camera_intrinsics(cfg.camera_intrinsics_json, scale=float(cfg.camera_scale))
         K_np, _dist = read_camera_intrinsics_new(cfg.camera_intrinsics_json)
@@ -235,7 +285,7 @@ def run_stage3_post_optimizations(
             X = X3d[:, si, :, :]
             t_opt, metrics = optimize_pred_cam_t(K=K, X3d=X, t0=t0, obs_by_t=obs_by_t, cfg=cfg.reproj_cfg)
             pred_cam_t[:, si, :] = t_opt
-            summary["reproj"][str(oid)] = metrics
+            summary["kps_reproj"][str(oid)] = metrics
 
         mhr["pred_cam_t"] = pred_cam_t.view(T * N, 3)
 
