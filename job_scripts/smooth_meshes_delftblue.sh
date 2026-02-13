@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name="sam3d_smooth_meshes"
-#SBATCH --partition=gpu-a100
-#SBATCH --time=10:00:00
+#SBATCH --partition=gpu
+#SBATCH --time=6:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END
