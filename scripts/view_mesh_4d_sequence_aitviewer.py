@@ -12,9 +12,23 @@ Expected directory structure (as produced by this repo after our object-id folde
       ...
 
 Usage:
+  # Basic usage (meshes in cm are scaled to meters by default)
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir /path/to/mesh_4d_individual
+  
+  # Select specific person IDs
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --ids 2 4 6 8
+  
+  # With frame stride and limit
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --stride 2 --max_frames 300
+  
+  # If meshes are already in meters (no scaling needed)
+  python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --scale 1.0
+  
+  # If you want XY as ground plane (Z-up) instead of XZ (Y-up SMPL default)
+  python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --swap-yz
+  
+  # Bird's eye view camera
+  python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --camera top --camera-distance 5
 """
 
 from __future__ import annotations
@@ -74,6 +88,33 @@ def _load_ply_mesh(path: str) -> Tuple[np.ndarray, np.ndarray]:
     if f.ndim != 2 or f.shape[1] != 3:
         raise ValueError(f"Invalid faces shape {f.shape} in {path}")
     return v, f
+
+
+def _transform_vertices(
+    verts: np.ndarray,
+    scale: float = 1.0,
+    swap_yz: bool = False,
+) -> np.ndarray:
+    """
+    Apply transformations to vertices.
+    
+    Args:
+        verts: (T, V, 3) or (V, 3) vertex array
+        scale: Scale factor (e.g., 0.01 to convert cm to meters)
+        swap_yz: If True, swap Y and Z axes (convert Y-up to Z-up coordinate system)
+    
+    Returns:
+        Transformed vertices with same shape as input.
+    """
+    v = verts * scale
+    if swap_yz:
+        # Swap Y and Z: (x, y, z) -> (x, z, y)
+        # This converts Y-up (SMPL convention) to Z-up (XY ground plane)
+        if v.ndim == 3:
+            v = v[:, :, [0, 2, 1]]
+        else:
+            v = v[:, [0, 2, 1]]
+    return v
 
 
 def _load_sequence_for_person(
@@ -197,6 +238,8 @@ def view_single_person_centered(
     show_floor: bool = True,
     camera_preset: str = "default",
     camera_distance: float = 5.0,
+    scale: float = 0.01,
+    swap_yz: bool = False,
 ) -> None:
     """
     View ONE person's mesh sequence, centered per-frame so the chosen center is at the origin.
@@ -212,6 +255,8 @@ def view_single_person_centered(
         print(f"[WARN] No meshes to view for person {person_id}.")
         return
     verts, faces, used = seq
+    # Apply scale and axis transformation
+    verts = _transform_vertices(verts, scale=scale, swap_yz=swap_yz)
     verts = _center_vertices_sequence(verts, center_mode=center_mode, center_vertex=center_vertex)
 
     from aitviewer.renderables.meshes import Meshes  # type: ignore
@@ -223,7 +268,10 @@ def view_single_person_centered(
     v.scene.add(mesh)
 
     if show_floor:
-        v.scene.floor.plane = "xy"
+        if swap_yz:
+            v.scene.floor.plane = "xy"
+        else:
+            v.scene.floor.plane = "xz"
         v.scene.floor.side_length = 20
 
     # Set camera position based on preset
@@ -231,19 +279,25 @@ def view_single_person_centered(
         scene_center = np.array([0.0, 0.0, 0.0])  # Centered mesh is at origin
         dist = camera_distance
         
-        if camera_preset == "top":
-            cam_pos = scene_center + np.array([0, 0, dist])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
-        elif camera_preset == "front":
-            cam_pos = scene_center + np.array([0, -dist, 1.0])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
-        elif camera_preset == "side":
-            cam_pos = scene_center + np.array([dist, 0, 1.0])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
+        if swap_yz:
+            # Z-up
+            if camera_preset == "top":
+                cam_pos = scene_center + np.array([0, 0, dist])
+            elif camera_preset == "front":
+                cam_pos = scene_center + np.array([0, -dist, 1.0])
+            elif camera_preset == "side":
+                cam_pos = scene_center + np.array([dist, 0, 1.0])
+        else:
+            # Y-up
+            if camera_preset == "top":
+                cam_pos = scene_center + np.array([0, dist, 0])
+            elif camera_preset == "front":
+                cam_pos = scene_center + np.array([0, 1.0, -dist])
+            elif camera_preset == "side":
+                cam_pos = scene_center + np.array([dist, 1.0, 0])
         
+        v.scene.camera.position = cam_pos
+        v.scene.camera.target = scene_center
         print(f"[INFO] Camera preset: {camera_preset}, distance: {dist}")
 
     if used:
@@ -281,6 +335,17 @@ def meshes_4d() -> None:
         default=10.0,
         help="Camera distance from scene center for preset views (default: 10.0)",
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=0.01,
+        help="Scale factor for vertices (default: 0.01 to convert cm to meters for aitviewer)",
+    )
+    parser.add_argument(
+        "--swap-yz",
+        action="store_true",
+        help="Swap Y and Z axes to convert Y-up (SMPL) to Z-up (XY ground plane)",
+    )
     args = parser.parse_args()
 
     mesh_dir = args.mesh_dir
@@ -305,6 +370,8 @@ def meshes_4d() -> None:
         if seq is None:
             continue
         verts, faces, used = seq
+        # Apply scale and axis transformation
+        verts = _transform_vertices(verts, scale=args.scale, swap_yz=args.swap_yz)
         vertices_by_id[str(pid)] = verts
         faces_by_id[str(pid)] = faces
         print(f"[OK] ID {pid}: {verts.shape[0]} frames, {verts.shape[1]} verts, {faces.shape[0]} faces")
@@ -345,7 +412,13 @@ def meshes_4d() -> None:
 
         v.scene.add(mesh)
 
-    v.scene.floor.plane = "xy"
+    # Set floor plane based on coordinate system
+    if args.swap_yz:
+        # Z-up: XY is ground plane
+        v.scene.floor.plane = "xy"
+    else:
+        # Y-up (SMPL default): XZ is ground plane
+        v.scene.floor.plane = "xz"
     v.scene.floor.side_length = 20
 
     # Set camera position based on preset
@@ -355,21 +428,25 @@ def meshes_4d() -> None:
         scene_center = all_verts.mean(axis=(0, 1))  # (3,)
         dist = args.camera_distance
         
-        if args.camera == "top":
-            # Bird's eye view: camera above looking down
-            cam_pos = scene_center + np.array([0, 0, dist])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
-        elif args.camera == "front":
-            # Front view: camera in front (negative Y) looking at center
-            cam_pos = scene_center + np.array([0, -dist, 1.5])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
-        elif args.camera == "side":
-            # Side view: camera to the side (positive X) looking at center
-            cam_pos = scene_center + np.array([dist, 0, 1.5])
-            v.scene.camera.position = cam_pos
-            v.scene.camera.target = scene_center
+        if args.swap_yz:
+            # Z-up coordinate system
+            if args.camera == "top":
+                cam_pos = scene_center + np.array([0, 0, dist])
+            elif args.camera == "front":
+                cam_pos = scene_center + np.array([0, -dist, 1.5])
+            elif args.camera == "side":
+                cam_pos = scene_center + np.array([dist, 0, 1.5])
+        else:
+            # Y-up coordinate system (SMPL default)
+            if args.camera == "top":
+                cam_pos = scene_center + np.array([0, dist, 0])
+            elif args.camera == "front":
+                cam_pos = scene_center + np.array([0, 1.5, -dist])
+            elif args.camera == "side":
+                cam_pos = scene_center + np.array([dist, 1.5, 0])
+        
+        v.scene.camera.position = cam_pos
+        v.scene.camera.target = scene_center
         
         print(f"[INFO] Camera preset: {args.camera}, distance: {dist}")
         print(f"       Position: {v.scene.camera.position}, Target: {v.scene.camera.target}")
@@ -429,6 +506,17 @@ def meshes_4d_single_person() -> None:
         default=5.0,
         help="Camera distance from scene center for preset views (default: 5.0)",
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=0.01,
+        help="Scale factor for vertices (default: 0.01 to convert cm to meters for aitviewer)",
+    )
+    parser.add_argument(
+        "--swap-yz",
+        action="store_true",
+        help="Swap Y and Z axes to convert Y-up (SMPL) to Z-up (XY ground plane)",
+    )
     args = parser.parse_args()
 
     mesh_dir = args.mesh_dir
@@ -447,6 +535,8 @@ def meshes_4d_single_person() -> None:
             show_floor=(not args.no_floor),
             camera_preset=args.camera,
             camera_distance=args.camera_distance,
+            scale=args.scale,
+            swap_yz=args.swap_yz,
         )
         return
 
