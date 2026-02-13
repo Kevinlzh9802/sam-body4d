@@ -109,8 +109,10 @@ def main() -> None:
     parser.add_argument("--ground-lambda-slide", type=float, default=1.0)
     parser.add_argument("--ground-lambda-prior", type=float, default=0.2)
     parser.add_argument("--ground-lambda-vel", type=float, default=1.0)
-    parser.add_argument("--contact-z-thresh", type=float, default=0.03)
-    parser.add_argument("--contact-vxy-thresh", type=float, default=0.05)
+    parser.add_argument("--contact-z-thresh", type=float, default=3.0,
+                        help="Contact detection threshold for foot Z height in world units (default: 3.0 cm)")
+    parser.add_argument("--contact-vxy-thresh", type=float, default=5.0,
+                        help="Contact detection threshold for foot XY velocity in world units (default: 5.0 cm/frame)")
     parser.add_argument("--mhr-batch-size", type=int, default=256, help="Batch size for MHR forward pass (reduce if OOM)")
     parser.add_argument("--export-camera-space", action="store_true", 
                         help="Export meshes in camera coordinates instead of world coordinates. "
@@ -272,6 +274,7 @@ def main() -> None:
                 lambda_vel=float(args.ground_lambda_vel),
                 contact_z_thresh=float(args.contact_z_thresh),
                 contact_v_xy_thresh=float(args.contact_vxy_thresh),
+                world_scale=float(args.world_scale),
             ),
         )
 

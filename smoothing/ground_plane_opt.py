@@ -46,8 +46,13 @@ class GroundOptConfig:
     lambda_vel: float = 1.0
     lambda_plane: float = 5.0
     lambda_slide: float = 1.0
-    contact_z_thresh: float = 0.03  # in *world units* (depends on your extrinsic unit)
-    contact_v_xy_thresh: float = 0.05
+    # Contact detection thresholds (used for slide loss, and plane loss if always_grounded=False)
+    contact_z_thresh: float = 3.0  # in world units (cm if world_scale=100); frames where min_foot_z < this are "contact"
+    contact_v_xy_thresh: float = 5.0  # in world units (cm if world_scale=100); low XY velocity threshold for contact
+    world_scale: float = 100.0  # scale factor to convert SMPL-X meters to world units (100 for cm)
+    # If True (default), always push the lowest foot to ground (assumes humans are always standing)
+    # If False, only apply ground constraint when contact is detected
+    always_grounded: bool = True
 
 
 FOOT_IDXS = (13, 14, 15, 16, 17, 18, 19, 20)  # ankles + toes + heels in mhr70
@@ -73,11 +78,14 @@ def optimize_ground_plane_translation(
 
     dt = torch.zeros_like(t0, requires_grad=True)
     opt = torch.optim.Adam([dt], lr=float(cfg.lr))
+    world_scale = float(cfg.world_scale)
 
     def world_feet(t: torch.Tensor) -> torch.Tensor:
         # (T,8,3) in world coordinates
         feet_cam = X3d[:, list(FOOT_IDXS), :] + t[:, None, :]
-        feet_world = extr.cam_to_world(feet_cam.reshape(-1, 3)).view(T, len(FOOT_IDXS), 3)
+        # Scale from SMPL-X meters to world units (e.g., cm) before world transformation
+        feet_cam_scaled = feet_cam * world_scale
+        feet_world = extr.cam_to_world(feet_cam_scaled.reshape(-1, 3)).view(T, len(FOOT_IDXS), 3)
         return feet_world
 
     def contact_mask(feet_world: torch.Tensor) -> torch.Tensor:
@@ -93,18 +101,30 @@ def optimize_ground_plane_translation(
         c = (min_z.abs() < float(cfg.contact_z_thresh)) & (vmag < float(cfg.contact_v_xy_thresh))
         return c.float()  # (T,)
 
+    always_grounded = bool(cfg.always_grounded)
+    
     for _ in range(int(cfg.iters)):
         opt.zero_grad(set_to_none=True)
         t = t0 + dt
 
         feet_w = world_feet(t)
-        c = contact_mask(feet_w)  # (T,)
-
-        # Plane loss: drive min foot z to 0 on contact frames
+        
+        # Min foot z per frame
         min_z = feet_w[..., 2].min(dim=1).values  # (T,)
-        l_plane = (c * (min_z ** 2)).sum() / (c.sum() + 1e-6)
+        
+        if always_grounded:
+            # Always push the lowest foot toward ground (z=0) for ALL frames
+            # This assumes humans are always standing with at least one foot on ground
+            l_plane = (min_z ** 2).mean()
+            
+            # For slide loss, use frames where feet are actually close to ground
+            c = contact_mask(feet_w)
+        else:
+            # Only apply ground constraint when contact is detected (legacy mode)
+            c = contact_mask(feet_w)  # (T,)
+            l_plane = (c * (min_z ** 2)).sum() / (c.sum() + 1e-6)
 
-        # Slide loss: keep the contact foot xy stable
+        # Slide loss: keep the contact foot xy stable (only when near ground)
         l_slide = torch.zeros((), device=device)
         if T > 1:
             # use min-foot point per frame
@@ -134,11 +154,20 @@ def optimize_ground_plane_translation(
 
     with torch.no_grad():
         t_opt = (t0 + dt).detach()
+        # Compute final feet positions for metrics
+        feet_w_final = world_feet(t_opt)
+        min_z_final = feet_w_final[..., 2].min(dim=1).values
+        c_final = contact_mask(feet_w_final)
         metrics = {
             "loss_plane": float(l_plane.detach().cpu().item()),
             "loss_slide": float(l_slide.detach().cpu().item()),
             "loss_prior": float(l_prior.detach().cpu().item()),
             "loss_vel": float(l_vel.detach().cpu().item()),
+            "min_foot_z_mean": float(min_z_final.mean().item()),
+            "min_foot_z_std": float(min_z_final.std().item()),
+            "contact_frames": int(c_final.sum().item()),
+            "total_frames": T,
+            "always_grounded": always_grounded,
         }
     return t_opt, metrics
 
