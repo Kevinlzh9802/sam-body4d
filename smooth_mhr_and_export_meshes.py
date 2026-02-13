@@ -54,6 +54,7 @@ from smoothing.feet_z_plot import plot_feet_z_from_stage3
 from smoothing.projection_2d_plot import plot_2d_projections_from_stage3
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.ground_plane_opt import GroundOptConfig
+from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 
 
@@ -392,6 +393,61 @@ def main() -> None:
             )
         except Exception as e:
             print(f"[WARN] Failed to generate 2D projection plots: {e}")
+
+    # --- Reprojection overlay: projected mesh + keypoints on image + mask --- #
+    # Requires camera intrinsics + images directory from the raw payload.
+    meta = payload.get("meta", {})
+    input_dir = meta.get("input_dir", "")
+    images_dir = os.path.join(input_dir, "images") if input_dir else ""
+    masks_dir = os.path.join(input_dir, "masks") if input_dir else ""
+    has_images = images_dir and os.path.isdir(images_dir)
+    has_intrinsics = bool(args.camera_intrinsics_json)
+
+    if has_images and has_intrinsics:
+        from smoothing.stage3_core import read_camera_intrinsics_new, adjust_K as adjust_K_fn
+
+        reproj_overlay_dir = os.path.join(out_dir, "reproj_overlay")
+        try:
+            K_np, _dist = read_camera_intrinsics_new(args.camera_intrinsics_json)
+            K_np = adjust_K_fn(K_np, scale=float(args.camera_scale))
+
+            # Load observed 2D keypoints if available
+            bbox_data = None
+            oid_to_bidx = None
+            if args.bbox_kps_pkl:
+                from smoothing.obs_kps import load_bboxes_kps_pkl, build_obj_id_to_bbox_idx
+                bbox_data = load_bboxes_kps_pkl(args.bbox_kps_pkl)
+                oid_to_bidx = build_obj_id_to_bbox_idx(bbox_data)
+
+            plot_reproj_overlays_from_stage3(
+                verts=verts,
+                keypoints3d_local=j3d,
+                pred_cam_t=pred_cam_t,
+                faces=faces_np,
+                K=K_np,
+                images_dir=images_dir,
+                masks_dir=masks_dir if os.path.isdir(masks_dir) else None,
+                T=T,
+                N=N,
+                obj_ids_all=obj_ids_all,
+                frame_obj_ids_slots=frame_obj_ids_slots,
+                frame_names=frame_names,
+                output_dir=reproj_overlay_dir,
+                frame_interval=100,
+                bboxes_kps_data=bbox_data,
+                obj_id_to_bbox_idx=oid_to_bidx,
+            )
+        except Exception as e:
+            import traceback
+            print(f"[WARN] Failed to generate reproj overlay plots: {e}")
+            traceback.print_exc()
+    else:
+        reasons = []
+        if not has_images:
+            reasons.append(f"images dir not found ({images_dir!r})")
+        if not has_intrinsics:
+            reasons.append("--camera-intrinsics-json not provided")
+        print(f"[INFO] Skipping reproj overlay: {'; '.join(reasons)}")
 
 
 if __name__ == "__main__":
