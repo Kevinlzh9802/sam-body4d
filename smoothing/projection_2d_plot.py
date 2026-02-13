@@ -34,9 +34,13 @@ def compute_keypoint_projections_world(
     N: int,
     obj_ids_all: List[int],
     frame_obj_ids_slots: List[List[int]],
+    world_scale: float = 100.0,
 ) -> Dict[int, Dict[str, np.ndarray]]:
     """
     Compute world-space keypoint positions for head, pelvis, and feet.
+    
+    Args:
+        world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).
     
     Returns:
         Dict mapping obj_id -> {
@@ -68,9 +72,10 @@ def compute_keypoint_projections_world(
             kps_local = keypoints3d_local[bi]  # (K, 3)
             camt = pred_cam_t[bi]  # (3,)
             
-            # Transform to camera space then world space
+            # Transform to camera space and scale to extrinsic units
             kps_cam = kps_local + camt.view(1, 3)
-            kps_world = extr.cam_to_world(kps_cam)  # (K, 3)
+            kps_cam_scaled = kps_cam * world_scale
+            kps_world = extr.cam_to_world(kps_cam_scaled)  # (K, 3)
             
             # Extract XY (ground plane projection) for each body part
             if head_idxs:
@@ -239,10 +244,14 @@ def plot_2d_projections_from_stage3(
     frame_obj_ids_slots: List[List[int]],
     output_dir: str,
     frame_interval: int = 100,
+    world_scale: float = 100.0,
 ) -> None:
     """
     Convenience function to compute and plot 2D projections in one call.
     Called from smooth_mhr_and_export_meshes.py after stage 3 processing.
+    
+    Args:
+        world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).
     """
     projections = compute_keypoint_projections_world(
         keypoints3d_local=keypoints3d_local,
@@ -252,6 +261,7 @@ def plot_2d_projections_from_stage3(
         N=N,
         obj_ids_all=obj_ids_all,
         frame_obj_ids_slots=frame_obj_ids_slots,
+        world_scale=world_scale,
     )
     
     plot_2d_projections_sequence(

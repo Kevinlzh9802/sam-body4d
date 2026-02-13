@@ -116,6 +116,10 @@ def main() -> None:
                         help="Export meshes in camera coordinates instead of world coordinates. "
                              "By default, meshes are exported in world space (requires --extrinsics-json) "
                              "where the ground plane is at z=0.")
+    parser.add_argument("--world-scale", type=float, default=100.0,
+                        help="Scale factor to apply to mesh coordinates before world-space transformation. "
+                             "Default 100.0 converts SMPL-X meters to centimeters (use if extrinsics are in cm). "
+                             "Set to 1.0 if extrinsics are already in meters.")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -305,6 +309,10 @@ def main() -> None:
             print("[INFO] Exporting meshes in WORLD coordinates (ground plane at z=0)")
     if not export_world:
         print("[INFO] Exporting meshes in CAMERA coordinates")
+    
+    world_scale = float(args.world_scale)
+    if export_world and world_scale != 1.0:
+        print(f"[INFO] Applying world scale factor: {world_scale} (mesh coordinates will be scaled before world transform)")
 
     # Export per frame/per obj_id (only when present)
     faces_np = estimator.faces
@@ -320,8 +328,10 @@ def main() -> None:
             v_cam = v + camt
             
             if extr is not None:
-                # Transform from camera space to world space
-                v_cam_t = torch.from_numpy(v_cam).to(device=device, dtype=torch.float32)
+                # Scale camera-space coordinates before world transformation
+                # (converts SMPL-X meters to extrinsic units, e.g., centimeters)
+                v_cam_scaled = v_cam * world_scale
+                v_cam_t = torch.from_numpy(v_cam_scaled).to(device=device, dtype=torch.float32)
                 v_world = extr.cam_to_world(v_cam_t).cpu().numpy()
                 mesh_vertices = v_world
             else:
@@ -357,6 +367,7 @@ def main() -> None:
                 frame_obj_ids_slots=frame_obj_ids_slots,
                 output_path=feet_z_plot_path,
                 title="Average Feet Z-Coordinate (World Space) - Post Stage 3",
+                world_scale=world_scale,
             )
         except Exception as e:
             print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
@@ -374,6 +385,7 @@ def main() -> None:
                 frame_obj_ids_slots=frame_obj_ids_slots,
                 output_dir=projection_2d_dir,
                 frame_interval=100,
+                world_scale=world_scale,
             )
         except Exception as e:
             print(f"[WARN] Failed to generate 2D projection plots: {e}")

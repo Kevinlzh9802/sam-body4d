@@ -22,6 +22,8 @@ set -euo pipefail
 #   --camera-scale <float>    Camera scale factor (default: 0.5)
 #   --extrinsics-json <path>  Path to camera extrinsics JSON (required for --enable-ground and world-space export)
 #   --export-camera-space     Export meshes in camera coordinates instead of world space (default is world space)
+#   --world-scale <float>     Scale factor to convert SMPL-X meters to extrinsic units (default: 100.0 for cm)
+#                             Use 1.0 if your extrinsics are already in meters.
 #
 # NOTE: Paths can be specified as HOST paths (e.g. /scratch/zli33/data/sam4d/inputs/...)
 #       and will be automatically translated to container paths (/mnt/data/sam4d_body/...).
@@ -85,6 +87,7 @@ camera_intrinsics_json_host=""
 camera_scale=""
 extrinsics_json_host=""
 export_camera_space=""
+world_scale="100.0"  # Default: convert SMPL-X meters to centimeters
 
 # Translate a host path under $data_path into the corresponding container path.
 # This is defined early so it can be used in argument validation.
@@ -147,6 +150,10 @@ while [[ $# -gt 0 ]]; do
     --export-camera-space|--camera-space)
       export_camera_space="1"
       shift
+      ;;
+    --world-scale)
+      world_scale="$2"
+      shift 2
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -372,6 +379,10 @@ PY
         echo "[WARN] World-space export requires --extrinsics-json. Will fall back to camera space if not provided."
       fi
     fi
+    
+    # World scale (default 100.0 to convert SMPL-X meters to centimeters)
+    smooth_opts="$smooth_opts,WORLD_SCALE=$world_scale"
+    echo "[INFO] World scale: $world_scale"
     
     sbatch --export=ALL,$smooth_opts "$job_script_smooth" "$s3_dir_host"
     ;;

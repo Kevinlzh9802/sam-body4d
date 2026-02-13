@@ -28,9 +28,13 @@ def compute_feet_z_world(
     N: int,
     obj_ids_all: List[int],
     frame_obj_ids_slots: List[List[int]],
+    world_scale: float = 100.0,
 ) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
     """
     Compute average feet z-coordinate in world space for each person across frames.
+    
+    Args:
+        world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).
     
     Returns:
         Dict mapping obj_id -> (frame_indices, avg_feet_z_values)
@@ -60,8 +64,11 @@ def compute_feet_z_world(
             # Transform to camera space
             feet_cam = feet_local + camt.view(1, 3)
             
+            # Scale to extrinsic units (e.g., meters -> centimeters)
+            feet_cam_scaled = feet_cam * world_scale
+            
             # Transform to world space
-            feet_world = extr.cam_to_world(feet_cam)  # (num_feet, 3)
+            feet_world = extr.cam_to_world(feet_cam_scaled)  # (num_feet, 3)
             
             # Average z coordinate of all foot keypoints
             avg_z = feet_world[:, 2].mean().item()
@@ -136,10 +143,14 @@ def plot_feet_z_from_stage3(
     frame_obj_ids_slots: List[List[int]],
     output_path: str,
     title: Optional[str] = None,
+    world_scale: float = 100.0,
 ) -> None:
     """
     Convenience function to compute and plot feet z-coordinates in one call.
     Called from smooth_mhr_and_export_meshes.py after stage 3 processing.
+    
+    Args:
+        world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).
     """
     feet_z_data = compute_feet_z_world(
         keypoints3d_local=keypoints3d_local,
@@ -149,6 +160,7 @@ def plot_feet_z_from_stage3(
         N=N,
         obj_ids_all=obj_ids_all,
         frame_obj_ids_slots=frame_obj_ids_slots,
+        world_scale=world_scale,
     )
     
     plot_feet_z_world(
