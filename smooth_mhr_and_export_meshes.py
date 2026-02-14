@@ -100,7 +100,10 @@ def main() -> None:
     parser.add_argument("--mask-reproj-lambda-coverage", type=float, default=0.5,
                         help="Weight for mask coverage loss")
     parser.add_argument("--mask-reproj-lambda-prior", type=float, default=0.1)
-    parser.add_argument("--mask-reproj-lambda-vel", type=float, default=0.5)
+    parser.add_argument("--mask-reproj-lambda-vel", type=float, default=1.0,
+                        help="Weight for velocity smoothness (1st order)")
+    parser.add_argument("--mask-reproj-lambda-accel", type=float, default=0.5,
+                        help="Weight for acceleration smoothness (2nd order, reduces jitter)")
     parser.add_argument("--mask-reproj-num-verts", type=int, default=500,
                         help="Number of vertices to sample for mask reproj (0 = use all)")
     
@@ -126,6 +129,8 @@ def main() -> None:
     parser.add_argument("--ground-lambda-slide", type=float, default=1.0)
     parser.add_argument("--ground-lambda-prior", type=float, default=0.2)
     parser.add_argument("--ground-lambda-vel", type=float, default=1.0)
+    parser.add_argument("--ground-lambda-accel", type=float, default=0.5,
+                        help="Acceleration smoothness for ground optimization (reduces jitter)")
     parser.add_argument("--contact-z-thresh", type=float, default=3.0,
                         help="Contact detection threshold for foot Z height in world units (default: 3.0 cm)")
     parser.add_argument("--contact-vxy-thresh", type=float, default=5.0,
@@ -299,6 +304,7 @@ def main() -> None:
                 lambda_mask_coverage=float(args.mask_reproj_lambda_coverage),
                 lambda_prior=float(args.mask_reproj_lambda_prior),
                 lambda_vel=float(args.mask_reproj_lambda_vel),
+                lambda_accel=float(args.mask_reproj_lambda_accel),
                 num_sample_vertices=int(args.mask_reproj_num_verts),
             ),
             # Legacy kps reproj config
@@ -323,6 +329,7 @@ def main() -> None:
                 lambda_slide=float(args.ground_lambda_slide),
                 lambda_prior=float(args.ground_lambda_prior),
                 lambda_vel=float(args.ground_lambda_vel),
+                lambda_accel=float(args.ground_lambda_accel),
                 contact_z_thresh=float(args.contact_z_thresh),
                 contact_v_xy_thresh=float(args.contact_vxy_thresh),
                 world_scale=float(args.world_scale),

@@ -108,6 +108,7 @@ apptainer exec --nv \
     ${MASK_REPROJ_LAMBDA_COVERAGE:+--mask-reproj-lambda-coverage "$MASK_REPROJ_LAMBDA_COVERAGE"} \
     ${MASK_REPROJ_LAMBDA_PRIOR:+--mask-reproj-lambda-prior "$MASK_REPROJ_LAMBDA_PRIOR"} \
     ${MASK_REPROJ_LAMBDA_VEL:+--mask-reproj-lambda-vel "$MASK_REPROJ_LAMBDA_VEL"} \
+    ${MASK_REPROJ_LAMBDA_ACCEL:+--mask-reproj-lambda-accel "$MASK_REPROJ_LAMBDA_ACCEL"} \
     ${MASK_REPROJ_NUM_VERTS:+--mask-reproj-num-verts "$MASK_REPROJ_NUM_VERTS"} \
     ${BBOX_KPS_PKL:+--bbox-kps-pkl "$BBOX_KPS_PKL"} \
     ${REPROJ_ITERS:+--reproj-iters "$REPROJ_ITERS"} \
@@ -124,6 +125,7 @@ apptainer exec --nv \
     ${GROUND_LAMBDA_SLIDE:+--ground-lambda-slide "$GROUND_LAMBDA_SLIDE"} \
     ${GROUND_LAMBDA_PRIOR:+--ground-lambda-prior "$GROUND_LAMBDA_PRIOR"} \
     ${GROUND_LAMBDA_VEL:+--ground-lambda-vel "$GROUND_LAMBDA_VEL"} \
+    ${GROUND_LAMBDA_ACCEL:+--ground-lambda-accel "$GROUND_LAMBDA_ACCEL"} \
     ${CONTACT_Z_THRESH:+--contact-z-thresh "$CONTACT_Z_THRESH"} \
     ${CONTACT_VXY_THRESH:+--contact-vxy-thresh "$CONTACT_VXY_THRESH"} \
     ${EXPORT_CAMERA_SPACE:+--export-camera-space} \

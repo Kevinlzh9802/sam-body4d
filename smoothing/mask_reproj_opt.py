@@ -24,7 +24,8 @@ class MaskReprojOptConfig:
     lambda_vertex_in_mask: float = 1.0  # projected vertices should be inside mask
     lambda_mask_coverage: float = 0.5   # mask should be covered by projection
     lambda_prior: float = 0.1           # don't deviate too much from initial
-    lambda_vel: float = 0.5             # temporal smoothness
+    lambda_vel: float = 1.0             # temporal smoothness (1st order: penalise velocity)
+    lambda_accel: float = 0.5           # temporal smoothness (2nd order: penalise acceleration / jitter)
     num_sample_vertices: int = 500      # sample vertices for efficiency (0 = use all)
     mask_scale: float = 1.0             # scale factor if masks are at different resolution
 
@@ -252,17 +253,24 @@ def optimize_mask_reprojection(
         # Prior: don't deviate too much from initial
         loss_prior = ((t - t0) ** 2).sum(dim=-1).mean()
         
-        # Temporal smoothness
+        # Temporal smoothness (velocity)
         loss_vel = torch.tensor(0.0, device=device)
         if T > 1:
             v = t[1:] - t[:-1]
             loss_vel = (v * v).sum(dim=-1).mean()
+        
+        # Temporal smoothness (acceleration / jitter)
+        loss_accel = torch.tensor(0.0, device=device)
+        if T >= 3 and float(cfg.lambda_accel) > 0.0:
+            a = t[2:] - 2.0 * t[1:-1] + t[:-2]
+            loss_accel = (a * a).sum(dim=-1).mean()
         
         loss = (
             float(cfg.lambda_vertex_in_mask) * loss_vertex_in_mask
             + float(cfg.lambda_mask_coverage) * loss_coverage
             + float(cfg.lambda_prior) * loss_prior
             + float(cfg.lambda_vel) * loss_vel
+            + float(cfg.lambda_accel) * loss_accel
         )
         
         loss.backward()
@@ -275,6 +283,7 @@ def optimize_mask_reprojection(
             "loss_coverage": float(loss_coverage.item()) if n_frames > 0 else 0.0,
             "loss_prior": float(loss_prior.item()),
             "loss_vel": float(loss_vel.item()),
+            "loss_accel": float(loss_accel.item()),
             "valid_frames": n_frames,
         }
     

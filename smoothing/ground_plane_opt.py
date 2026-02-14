@@ -44,6 +44,7 @@ class GroundOptConfig:
     lr: float = 0.05
     lambda_prior: float = 0.2
     lambda_vel: float = 1.0
+    lambda_accel: float = 0.5  # acceleration penalty (2nd order smoothness, reduces jitter)
     lambda_plane: float = 5.0
     lambda_slide: float = 1.0
     # Contact detection thresholds (used for slide loss, and plane loss if always_grounded=False)
@@ -145,12 +146,19 @@ def optimize_ground_plane_translation(
             l_vel = (v * v).sum(dim=-1).mean()
         else:
             l_vel = t.sum() * 0.0
+        
+        # Acceleration penalty (2nd order smoothness — reduces jitter)
+        l_accel = t.sum() * 0.0
+        if T >= 3 and float(cfg.lambda_accel) > 0.0:
+            a = (t[2:] - 2.0 * t[1:-1] + t[:-2]) * world_scale
+            l_accel = (a * a).sum(dim=-1).mean()
 
         loss = (
             float(cfg.lambda_plane) * l_plane
             + float(cfg.lambda_slide) * l_slide
             + float(cfg.lambda_prior) * l_prior
             + float(cfg.lambda_vel) * l_vel
+            + float(cfg.lambda_accel) * l_accel
         )
         loss.backward()
         opt.step()
@@ -166,6 +174,7 @@ def optimize_ground_plane_translation(
             "loss_slide": float(l_slide.detach().cpu().item()),
             "loss_prior": float(l_prior.detach().cpu().item()),
             "loss_vel": float(l_vel.detach().cpu().item()),
+            "loss_accel": float(l_accel.detach().cpu().item()),
             "min_foot_z_mean": float(min_z_final.mean().item()),
             "min_foot_z_std": float(min_z_final.std().item()),
             "contact_frames": int(c_final.sum().item()),
