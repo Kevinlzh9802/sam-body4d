@@ -29,10 +29,10 @@ def extract_folder(video_folder: str, output_folder: str):
 
 
 if __name__ == "__main__":
-    # video_path = "/home/zonghuan/tudelft/projects/datasets/conflab/data_raw/cameras/video/cam04/GH020010.MP4"
-    # time = "00:03:45"
-    # frame = extract_frame(video_path, time)
-    # cv2.imwrite("./experiments/extrinsics/calibration/cam04_345s.jpg", frame)
-    video_folder = "./experiments/video_segs_20s"
-    output_folder = "./experiments/video_segs_20s_frames"
-    extract_folder(video_folder, output_folder)
+    video_path = "/home/zonghuan/tudelft/projects/datasets/conflab/data_raw/cameras/video/cam04/GH020010_rot.MP4"
+    time = "00:03:45"
+    frame = extract_frame(video_path, time)
+    cv2.imwrite("./experiments/extrinsics/calibration/cam04_345s.jpg", frame)
+    # video_folder = "./experiments/video_segs_20s"
+    # output_folder = "./experiments/video_segs_20s_frames"
+    # extract_folder(video_folder, output_folder)
