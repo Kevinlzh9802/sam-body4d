@@ -7,30 +7,22 @@ Expected input folder layout:
     428_seg001.mp4
     428_seg002.mp4
     ...
-    detections.json
 
-Initial bboxes are read from detections.json (directly under the input folder).
-JSON format:
-  {
-    "images": [
-      {
-        "image": "428_seg001_frame0.jpg",
-        "bboxes": [
-          { "temporal_id": 0, "real_id": 1, "x": 120.5, "y": 80.32, "w": 45.2, "h": 38.1, "score": 0.92 },
-          ...
-        ]
-      },
-      ...
-    ]
-  }
+  <annotation_folder>/       (path given by --annotation-folder)
+    428_seg001.json
+    428_seg002.json
+    ...
 
-Each "image" field corresponds to the first frame of a segment (e.g. 428_seg001_frame0.jpg
-→ 428_seg001.mp4). Bboxes use "real_id" as person PID; x,y,w,h in pixels. The script
-builds consecutive IDs for tracking and maps back to real_id in outputs.
+Each annotation JSON has the same base name as the segment (e.g. 428_seg001.json for
+428_seg001.mp4). In each file, the "shapes" field is a list; each item is one person:
+  - "label": real person ID (string or number, converted to int)
+  - "points": [[x1, y1], [x2, y2]] — two corners of the bbox rectangle (any order).
+The script derives (x, y, w, h) from the two points and builds consecutive IDs for tracking.
 
 Usage:
   python run_sam3_masklets_batch.py \\
       --input-folder /mnt/data/sam4d_body/inputs/videos/428 \\
+      --annotation-folder /mnt/data/sam4d_body/inputs/annotations/428 \\
       --output /mnt/data/sam4d_body/outputs/exp_XXX/masklets \\
       --config configs/body4d.yaml
 """
@@ -188,57 +180,60 @@ def _segment_key_from_path(seg_path: str) -> str:
     return os.path.splitext(os.path.basename(seg_path))[0]
 
 
-def load_detections_json(
-    input_folder: str,
-) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[int, int], Dict[int, int]]:
+def _points_to_bbox_xywh(points: List[List[float]]) -> Tuple[float, float, float, float]:
     """
-    Load detections.json from input_folder and build:
-    - detections_by_segment: segment_key -> list of bbox dicts (real_id, x, y, w, h, ...)
-    - consecutive_to_actual, actual_to_consecutive: ID mapping from all unique real_ids
+    Convert two corner points [[x1,y1], [x2,y2]] to (x, y, w, h).
+    Order of corners is arbitrary; min/max are used to get the rectangle.
+    """
+    if len(points) < 2:
+        return 0.0, 0.0, 0.0, 0.0
+    x1, y1 = float(points[0][0]), float(points[0][1])
+    x2, y2 = float(points[1][0]), float(points[1][1])
+    x = min(x1, x2)
+    y = min(y1, y2)
+    w = abs(x2 - x1)
+    h = abs(y2 - y1)
+    return x, y, w, h
 
-    Image filename in JSON must match segment first frame (e.g. 428_seg001_frame0.jpg
-    for segment 428_seg001.mp4). Segment key is derived by stripping _frame0.* from image.
+
+def load_annotation_json(
+    annotation_folder: str,
+    segment_key: str,
+) -> List[Dict[str, Any]]:
     """
-    path = os.path.join(input_folder, "detections.json")
+    Load annotation JSON for a segment from annotation_folder.
+    File name must be <segment_key>.json (e.g. 428_seg001.json).
+
+    Reads "shapes" (list). Each item: "label" -> real_id (int), "points" -> [[x1,y1],[x2,y2]].
+    Returns list of bbox dicts with keys: real_id, x, y, w, h (derived from the two points).
+    """
+    path = os.path.join(annotation_folder, f"{segment_key}.json")
     if not os.path.isfile(path):
-        raise FileNotFoundError(f"detections.json not found: {path}")
+        raise FileNotFoundError(f"Annotation file not found: {path}")
 
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    images = data.get("images", [])
-    if not images:
-        raise ValueError("detections.json has no 'images' array")
+    shapes = data.get("shapes", [])
+    if not isinstance(shapes, list):
+        raise ValueError(f"{path}: 'shapes' must be a list")
 
-    detections_by_segment: Dict[str, List[Dict[str, Any]]] = {}
-    all_real_ids = set()
-
-    for entry in images:
-        image_name = entry.get("image", "")
-        if not image_name:
+    bbox_entries: List[Dict[str, Any]] = []
+    for item in shapes:
+        label = item.get("label")
+        if label is None:
             continue
-        # 428_seg001_frame0.jpg -> 428_seg001
-        base = os.path.splitext(image_name)[0]
-        if not base.endswith("_frame0"):
-            continue
-        segment_key = base[: -len("_frame0")]
-        bboxes = entry.get("bboxes", [])
-        detections_by_segment[segment_key] = bboxes
-        for b in bboxes:
-            rid = b.get("real_id")
-            if rid is not None:
-                all_real_ids.add(int(rid))
-
-    # Build consecutive <-> actual ID mapping (sorted for stable ordering)
-    sorted_real = sorted(all_real_ids)
-    consecutive_to_actual: Dict[int, int] = {}
-    actual_to_consecutive: Dict[int, int] = {}
-    for i, rid in enumerate(sorted_real):
-        cid = i + 1
-        consecutive_to_actual[cid] = rid
-        actual_to_consecutive[rid] = cid
-
-    return detections_by_segment, consecutive_to_actual, actual_to_consecutive
+        actual_pid = int(label) if not isinstance(label, int) else label
+        points = item.get("points", [])
+        x, y, w, h = _points_to_bbox_xywh(points)
+        bbox_entries.append({
+            "real_id": actual_pid,
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+        })
+    return bbox_entries
 
 
 def bbox_xywh_to_rel(bbox_xywh: List[float], width: int, height: int) -> np.ndarray:
@@ -265,7 +260,13 @@ def main():
         "--input-folder",
         type=str,
         required=True,
-        help="Folder containing video segments and detections.json (e.g. .../428/)",
+        help="Folder containing video segments (e.g. .../428/)",
+    )
+    parser.add_argument(
+        "--annotation-folder",
+        type=str,
+        required=True,
+        help="Folder containing per-segment annotation JSONs (e.g. .../428/ has 428_seg001.json, ...)",
     )
     parser.add_argument(
         "--config",
@@ -308,12 +309,14 @@ def main():
     for sp in segment_paths:
         print(f"  {sp}")
 
-    # Load detections.json (bboxes per segment)
-    print(f"[INFO] Loading detections from: {os.path.join(input_folder, 'detections.json')}")
-    detections_by_segment, consecutive_to_actual, actual_to_consecutive = load_detections_json(
-        input_folder
-    )
-    print(f"[INFO] Detections for {len(detections_by_segment)} segment(s), ID mapping: {consecutive_to_actual}")
+    annotation_folder = args.annotation_folder
+    if not os.path.isdir(annotation_folder):
+        raise FileNotFoundError(f"Annotation folder not found: {annotation_folder}")
+    print(f"[INFO] Annotation folder: {annotation_folder}")
+
+    # ID mapping built incrementally as we process each segment
+    consecutive_to_actual: Dict[int, int] = {}
+    actual_to_consecutive: Dict[int, int] = {}
 
     # Output dir
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -350,11 +353,20 @@ def main():
         print(f"[INFO] Segment {seg_idx}: {seg_name}")
         print(f"[INFO]   frames: {seg_total_frames}, cumulative offset: {cumulative_frame_offset}")
 
-        # Look up bboxes from detections.json for this segment
-        seg_bbox_entries = detections_by_segment.get(segment_key)
+        # Load bboxes from annotation JSON for this segment (same name as segment: <segment_key>.json)
+        try:
+            seg_bbox_entries = load_annotation_json(annotation_folder, segment_key)
+        except FileNotFoundError as e:
+            print(f"[WARN] {e}. Skipping segment.")
+            cumulative_frame_offset += seg_total_frames
+            continue
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"[WARN] Failed to load annotation for '{segment_key}': {e}. Skipping segment.")
+            cumulative_frame_offset += seg_total_frames
+            continue
         if not seg_bbox_entries:
             print(
-                f"[WARN] No detections for segment key '{segment_key}' in detections.json. Skipping segment."
+                f"[WARN] No shapes (or no valid bboxes) for segment key '{segment_key}'. Skipping segment."
             )
             cumulative_frame_offset += seg_total_frames
             continue
@@ -446,11 +458,10 @@ def main():
     print(f"[INFO] Saved ID mapping to: {id_mapping_path}")
 
     # Save metadata
-    detections_path = os.path.join(input_folder, "detections.json")
     meta = {
         "input_folder": os.path.abspath(input_folder),
+        "annotation_folder": os.path.abspath(annotation_folder),
         "folder_name": folder_name,
-        "detections_path": os.path.abspath(detections_path),
         "config_path": os.path.abspath(cfg_path),
         "output_dir": os.path.abspath(output_dir),
         "fps": fps,
