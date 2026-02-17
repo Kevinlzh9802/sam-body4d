@@ -27,9 +27,10 @@
 #     -> processes all <2xx> folders
 #
 # Defaults (container paths):
-#   --input-folder  /mnt/data/conflab/video_segs/<NUM>
-#   --output        /mnt/data/conflab/bbox_kp/<NUM>
-#   --config        configs/body4d.yaml
+#   --input-folder       /mnt/data/conflab/video_segs_20s/<NUM>
+#   --annotation-folder  /mnt/data/conflab/video_frame_annotations
+#   --output             /mnt/data/conflab/bbox_kp/<NUM>
+#   --config             configs/body4d.yaml
 
 set -euo pipefail
 
@@ -44,6 +45,10 @@ bind_model_path=/mnt/sam4d_checkpoints
 bind_data_path_conflab=/mnt/data/conflab
 bind_data_path_sam4d=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
+
+# Annotation folder: host path and container path (for --annotation-folder)
+annotation_folder_host="$data_path_conflab/video_frame_annotations"
+annotation_folder_container="$bind_data_path_conflab/video_frame_annotations"
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
 repo_dir=$home_path/projects/sam-body4d
@@ -158,6 +163,7 @@ for VIDEO_NUM in "${video_nums[@]}"; do
   mkdir -p "$data_path_conflab/bbox_kp/$VIDEO_NUM"
 
   echo "[INFO] video_input_folder=$video_input_folder_container"
+  echo "[INFO] annotation_folder=$annotation_folder_container"
   echo "[INFO] output=$output_container"
 
   if apptainer exec --nv \
@@ -170,6 +176,7 @@ for VIDEO_NUM in "${video_nums[@]}"; do
     $sif_path \
     python $project_folder/run_sam3_masklets_batch.py \
       --input-folder "$video_input_folder_container" \
+      --annotation-folder "$annotation_folder_container" \
       --config ${CONFIG_REL:-configs/body4d.yaml} \
       --output "$output_container" ; then
     echo "[INFO] [$idx/$total] VIDEO_NUM=$VIDEO_NUM completed successfully."
