@@ -332,6 +332,8 @@ def split_video_into_segments(
             break
         output_filename = f"{video_name}_seg{i+1:03d}{video_ext}"
         output_path = os.path.join(output_dir, output_filename)
+        if verbose:
+            print(f"[INFO] Segment {i+1}/{num_segments}: creating {output_filename} (frames {start_frame}-{start_frame + num_frames - 1}, {num_frames} frames)")
         try:
             cut_video_frames(
                 video_path=video_path,
@@ -341,22 +343,28 @@ def split_video_into_segments(
                 verbose=verbose,
             )
             output_files.append(output_path)
+            if verbose:
+                print(f"[INFO]   Segment created: {output_path}")
             # Extract first frame of this segment
             frame_filename = f"{video_name}_seg{i+1:03d}_frame0.jpg"
             frame_path = os.path.join(output_dir, frame_filename)
+            if verbose:
+                print(f"[INFO]   Extracting first frame for segment {i+1}: {frame_filename}")
             try:
                 extract_first_frame(
                     video_path=output_path,
                     output_path=frame_path,
                     verbose=verbose,
                 )
+                if verbose:
+                    print(f"[INFO]   First frame saved: {frame_path}")
             except Exception as e:
-                print(f"  Error extracting first frame for segment {i+1}: {e}")
+                print(f"[WARN]   Error extracting first frame for segment {i+1}: {e}")
         except Exception as e:
-            print(f"  Error cutting segment {i+1}: {e}")
+            print(f"[ERROR]   Error cutting segment {i+1}: {e}")
     
     if verbose:
-        print(f"  Created {len(output_files)} segments")
+        print(f"[INFO] Created {len(output_files)} segments")
     
     return output_files
 
