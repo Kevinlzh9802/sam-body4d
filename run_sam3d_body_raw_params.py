@@ -91,6 +91,11 @@ def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimato
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 2: dump raw MHR params from masks/images")
     parser.add_argument("--input", required=True, help="Stage1 output dir (contains images/, masks/)")
+    parser.add_argument(
+        "--intrinsic-path",
+        default=None,
+        help="Path to camera intrinsics JSON (e.g. parameters-camera-04.json). If unset, derived from input path.",
+    )
     parser.add_argument("--config", default=None, help="Config YAML (default: configs/body4d.yaml)")
     parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference call (throughput only)")
     parser.add_argument("--out", default=None, help="Output .pt path (default: <input>/raw_mhr.pt)")
@@ -137,23 +142,30 @@ def main() -> None:
     # This preserves original pipeline defaults (env var unset).
     os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
 
-    # Camera intrinsics are loaded by mapping:
-    #   <...>/outputs/<...>  ->  <...>/inputs/camera_intrinsics/intrinsic_4.json
-    #
-    # i.e. we locate the "outputs" directory level inside input_dir and replace the
-    # remainder with the fixed intrinsics path under "inputs".
-    p = Path(os.path.normpath(input_dir))
-    parts = list(p.parts)
-    out_idx = None
-    for i, part in enumerate(parts):
-        if part in {"outputs", "output"}:
-            out_idx = i
-            break
-    if out_idx is None:
-        raise FileNotFoundError(f'Cannot derive camera intrinsics path')
-    dataset_root = Path(*parts[:out_idx])
-    # camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params" / "intrinsic_4.json")
-    camera_intrinsics_path = str(dataset_root / "inputs" / "camera_params_new" / "parameters-camera-04.json")
+    # Camera intrinsics: use --intrinsic-path if set; otherwise derive from input path.
+    if args.intrinsic_path and os.path.isfile(args.intrinsic_path):
+        camera_intrinsics_path = args.intrinsic_path
+    else:
+        if args.intrinsic_path:
+            raise FileNotFoundError(f"Intrinsic path not found: {args.intrinsic_path}")
+        # Derive: <...>/outputs/<...> -> <...>/inputs/camera_params_new/parameters-camera-04.json
+        p = Path(os.path.normpath(input_dir))
+        parts = list(p.parts)
+        out_idx = None
+        for i, part in enumerate(parts):
+            if part in {"outputs", "output"}:
+                out_idx = i
+                break
+        if out_idx is None:
+            raise FileNotFoundError(
+                "Cannot derive camera intrinsics path (no 'outputs' or 'output' in path). Use --intrinsic-path."
+            )
+        dataset_root = Path(*parts[:out_idx])
+        camera_intrinsics_path = str(
+            dataset_root / "inputs" / "camera_params_new" / "parameters-camera-04.json"
+        )
+    if not os.path.isfile(camera_intrinsics_path):
+        raise FileNotFoundError(f"Camera intrinsics file not found: {camera_intrinsics_path}")
     K, _ = read_camera_intrinsics_new(camera_intrinsics_path)
     K = adjust_K(K, scale=float(args.camera_scale))
     # K, _ = read_camera_intrinsics(camera_intrinsics_path, scale=float(args.camera_scale))
