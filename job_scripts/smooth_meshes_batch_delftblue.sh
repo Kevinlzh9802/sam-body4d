@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name="smooth_meshes_batch"
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu
 #SBATCH --time=18:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
