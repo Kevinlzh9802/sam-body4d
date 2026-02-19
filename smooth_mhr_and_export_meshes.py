@@ -6,7 +6,8 @@ Input:
   - raw_mhr.pt produced by run_sam3d_body_raw_params.py
 
 Output:
-  - mesh_4d_individual/<obj_id>/<frame>.ply in an output folder
+  - meshes_4d_individual.zip (archive of <obj_id>/<frame>.ply). Original PLY folder is
+    removed after zipping to avoid too many files. Use --no-zip-meshes to keep the folder.
 
 Notes:
   - This stage does NOT run the heavy image encoder. It only loads the SAM-3D-Body
@@ -19,6 +20,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -57,6 +60,7 @@ from smoothing.ground_plane_opt import GroundOptConfig
 from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
+from utils.extract_mesh_ground_info import run_extract_ground_info
 
 
 def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
@@ -144,6 +148,8 @@ def main() -> None:
                         help="Scale factor to apply to mesh coordinates before world-space transformation. "
                              "Default 100.0 converts SMPL-X meters to centimeters (use if extrinsics are in cm). "
                              "Set to 1.0 if extrinsics are already in meters.")
+    parser.add_argument("--no-zip-meshes", action="store_true",
+                        help="Do not zip meshes_4d_individual into .zip and do not delete PLY files (keep folder as-is).")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -415,6 +421,46 @@ def main() -> None:
             mesh.export(os.path.join(obj_out_dir, f"{frame_names[ti]}.ply"))
 
     print(f"[INFO] Exported smoothed meshes to: {mesh_dir}")
+
+    # Extract 2D ground-plane info (positions + orientations) from keypoints; save one pkl (+ csv) per output folder (world space only)
+    if extr is not None:
+        try:
+            _pkl = run_extract_ground_info(
+                keypoints3d_local=j3d.detach().cpu().numpy(),
+                pred_cam_t=pred_cam_t.detach().cpu().numpy(),
+                extr=extr,
+                world_scale=world_scale,
+                frame_names=frame_names,
+                obj_ids_all=obj_ids_all,
+                frame_obj_ids_slots=frame_obj_ids_slots,
+                T=T,
+                N=N,
+                output_dir=out_dir,
+                basename="ground_plane_info",
+                device=device,
+            )
+            if _pkl:
+                print(f"[INFO] Saved ground-plane info: {_pkl}")
+        except Exception as e:
+            print(f"[WARN] Ground-plane info extraction failed: {e}")
+
+    # Zip meshes_4d_individual into one archive and remove original .ply files (reduces inode count)
+    if not args.no_zip_meshes:
+        zip_path = os.path.join(out_dir, "meshes_4d_individual.zip")
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, _dirs, files in os.walk(mesh_dir):
+                    for f in files:
+                        if not f.endswith(".ply"):
+                            continue
+                        full = os.path.join(root, f)
+                        arcname = os.path.relpath(full, out_dir)
+                        zf.write(full, arcname)
+            print(f"[INFO] Created archive: {zip_path}")
+            shutil.rmtree(mesh_dir)
+            print(f"[INFO] Removed original PLY folder: {mesh_dir}")
+        except Exception as e:
+            print(f"[WARN] Zip/cleanup failed (PLY files left in place): {e}")
 
     # Plot feet z-coordinates in world space (only if extrinsics available)
     if extr is not None:
