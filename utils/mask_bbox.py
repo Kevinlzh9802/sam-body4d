@@ -28,9 +28,21 @@ def bbox_from_mask_convex_hull(binary_mask: np.ndarray) -> Optional[List[int]]:
     return [int(x), int(y), int(w), int(h)]
 
 
+def _find_segment_mapping(
+    frame_idx: int,
+    segment_id_mappings: List[Dict],
+) -> Optional[Dict[int, int]]:
+    """Return the consecutive->actual mapping for the segment that contains *frame_idx*."""
+    for seg in segment_id_mappings:
+        if int(seg["frame_start"]) <= frame_idx <= int(seg["frame_end"]):
+            return {int(k): int(v) for k, v in seg["consecutive_to_actual"].items()}
+    return None
+
+
 def extract_bboxes_from_masks(
     masks_dir: str,
     consecutive_to_actual: Optional[Dict[int, int]] = None,
+    segment_id_mappings: Optional[List[Dict]] = None,
 ) -> Dict[str, Dict[str, Dict[str, List[int]]]]:
     """
     Walk all mask PNGs in *masks_dir* and return::
@@ -50,19 +62,27 @@ def extract_bboxes_from_masks(
     Image IDs are the integer frame index (from the filename,
     e.g. ``00000001.png`` -> ``"1"``).
 
-    Person IDs in the output are the **actual** IDs (e.g. from bbox.pkl)
-    when *consecutive_to_actual* is provided.  The mask pixel values are
-    consecutive tracking IDs; this mapping translates them back.
-    If *consecutive_to_actual* is ``None``, the raw pixel values are used.
+    When *segment_id_mappings* is provided (list of per-segment dicts with
+    ``frame_start``, ``frame_end``, ``consecutive_to_actual``), the frame
+    index is used to look up the correct per-segment mapping.
+
+    Otherwise, *consecutive_to_actual* (a single global dict) is used.
+    If neither is given, raw pixel values are used as person IDs.
     """
     mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")))
 
     annotations: Dict[str, Dict[str, Dict[str, List[int]]]] = {}
 
     for mask_path in mask_paths:
-        # Image ID from filename: "00000003.png" -> "3"
         basename = os.path.splitext(os.path.basename(mask_path))[0]
-        image_id = str(int(basename))
+        frame_idx = int(basename)
+        image_id = str(frame_idx)
+
+        # Determine the ID mapping for this frame
+        if segment_id_mappings:
+            c2a = _find_segment_mapping(frame_idx, segment_id_mappings)
+        else:
+            c2a = consecutive_to_actual
 
         mask = np.array(Image.open(mask_path).convert("P"))
         obj_ids = np.unique(mask)
@@ -73,9 +93,8 @@ def extract_bboxes_from_masks(
             binary = ((mask == obj_id) * 255).astype(np.uint8)
             bb = bbox_from_mask_convex_hull(binary)
             if bb is not None:
-                # Map consecutive tracking ID -> actual person ID
-                if consecutive_to_actual is not None:
-                    actual_id = consecutive_to_actual.get(int(obj_id), int(obj_id))
+                if c2a is not None:
+                    actual_id = c2a.get(int(obj_id), int(obj_id))
                 else:
                     actual_id = int(obj_id)
                 bbox_dict[str(actual_id)] = bb

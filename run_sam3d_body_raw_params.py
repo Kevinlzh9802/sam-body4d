@@ -16,6 +16,7 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import copy
 import glob
 import json
 import os
@@ -110,23 +111,43 @@ def main() -> None:
     if not os.path.isdir(image_dir) or not os.path.isdir(masks_dir):
         raise FileNotFoundError(f"Missing images/ or masks/ in: {input_dir}")
 
-    # Load ID mapping from Stage 1 (consecutive -> actual PIDs)
+    # Load ID mapping from Stage 1 (per-segment or legacy global)
     id_mapping_path = os.path.join(input_dir, "id_mapping.json")
-    consecutive_to_actual: Dict[int, int] = {}
+    segment_id_mappings: List[Dict[str, Any]] = []
     if os.path.exists(id_mapping_path):
         with open(id_mapping_path, "r", encoding="utf-8") as f:
-            id_mapping = json.load(f)
-        consecutive_to_actual = {int(k): int(v) for k, v in id_mapping.get("consecutive_to_actual", {}).items()}
-        print(f"[INFO] Loaded ID mapping from: {id_mapping_path}")
-        print(f"[INFO] ID mapping (consecutive -> actual): {consecutive_to_actual}")
+            id_mapping_data = json.load(f)
+        if "segments" in id_mapping_data:
+            for seg in id_mapping_data["segments"]:
+                segment_id_mappings.append({
+                    "frame_start": int(seg["frame_start"]),
+                    "frame_end": int(seg["frame_end"]),
+                    "consecutive_to_actual": {int(k): int(v) for k, v in seg["consecutive_to_actual"].items()},
+                })
+            print(f"[INFO] Loaded per-segment ID mappings ({len(segment_id_mappings)} segments)")
+            for seg in segment_id_mappings:
+                print(f"[INFO]   frames [{seg['frame_start']}, {seg['frame_end']}]: {seg['consecutive_to_actual']}")
+        elif "consecutive_to_actual" in id_mapping_data:
+            # Legacy global format — wrap as a single segment spanning all frames
+            global_mapping = {int(k): int(v) for k, v in id_mapping_data["consecutive_to_actual"].items()}
+            segment_id_mappings.append({
+                "frame_start": 0,
+                "frame_end": 999_999_999,
+                "consecutive_to_actual": global_mapping,
+            })
+            print(f"[INFO] Loaded legacy global ID mapping: {global_mapping}")
     else:
         print(f"[WARN] No id_mapping.json found in {input_dir}; IDs will not be converted.")
-    
-    def to_actual_pid(consecutive_id: int) -> int:
-        """Convert consecutive ID to actual PID using the mapping."""
-        if consecutive_to_actual and int(consecutive_id) in consecutive_to_actual:
-            return consecutive_to_actual[int(consecutive_id)]
-        return consecutive_id  # fallback to original ID
+
+    def to_actual_pid(consecutive_id: int, frame_idx: int) -> int:
+        """Convert consecutive ID to actual PID using the per-segment mapping."""
+        for seg in segment_id_mappings:
+            if seg["frame_start"] <= frame_idx <= seg["frame_end"]:
+                mapping = seg["consecutive_to_actual"]
+                if int(consecutive_id) in mapping:
+                    return mapping[int(consecutive_id)]
+                break
+        return consecutive_id
 
     cfg_path = args.config or os.path.join(REPO_DIR, "configs", "body4d.yaml")
     if not os.path.exists(cfg_path):
@@ -183,26 +204,42 @@ def main() -> None:
     if n == 0:
         raise FileNotFoundError("Found no images or masks to process.")
 
+    # --------------- Pre-scan for corrupted (0-byte) files ---------------
+    corrupted_set: set = set()
+    for i in range(n):
+        img_size = os.path.getsize(images_list[i])
+        msk_size = os.path.getsize(masks_list[i])
+        if img_size == 0 or msk_size == 0:
+            corrupted_set.add(i)
+            print(f"[WARN] Corrupted frame {i}: "
+                  f"image={img_size}B ({os.path.basename(images_list[i])}), "
+                  f"mask={msk_size}B ({os.path.basename(masks_list[i])}) -> will interpolate")
+
+    if corrupted_set:
+        print(f"[INFO] {len(corrupted_set)} corrupted frames out of {n} total")
+
+    valid_indices = [i for i in range(n) if i not in corrupted_set]
+    valid_images = [images_list[i] for i in valid_indices]
+    valid_masks = [masks_list[i] for i in valid_indices]
+    n_valid = len(valid_images)
+
+    if n_valid == 0:
+        raise FileNotFoundError("All images/masks are corrupted — nothing to process.")
+
     # Minimal placeholders expected by process_image_with_mask
     idx_path, idx_dict, mhr_shape_scale_dict, occ_dict = {}, {}, {}, {}
 
-    # We accumulate "mhr" tensors by re-running on the whole clip, then re-pack.
-    # We use the model output stored inside estimator.model during inference; the
-    # easiest stable artifact is to run per chunk and collect per-frame per-person
-    # param dicts, then stack into tensors at the end.
-    #
-    # For minimal risk, we dump the per-frame per-person params as a list of frames.
-    frames: List[Dict[str, Any]] = []
+    # Collect per-frame results for valid (non-corrupted) frames only.
+    valid_frames: List[Dict[str, Any]] = []
 
-    # DEBUG: Track all IDs seen from masks vs IDs in final output
     all_mask_ids: set = set()
     all_output_ids: set = set()
-    id_mismatch_frames: List[Dict[str, Any]] = []
+    batch_size = int(args.batch_size)
 
-    for start in range(0, n, int(args.batch_size)):
-        end = min(n, start + int(args.batch_size))
-        batch_images = images_list[start:end]
-        batch_masks = masks_list[start:end]
+    for start in range(0, n_valid, batch_size):
+        end = min(n_valid, start + batch_size)
+        batch_images = valid_images[start:end]
+        batch_masks = valid_masks[start:end]
 
         outputs, id_batch, empty_frame_list = process_image_with_mask(
             estimator,
@@ -215,56 +252,41 @@ def main() -> None:
             cam_int,
         )
 
-        # DEBUG: Log batch-level info
         batch_mask_ids = set()
         for ids_in_frame in id_batch:
             if ids_in_frame:
                 batch_mask_ids.update(ids_in_frame)
                 all_mask_ids.update(ids_in_frame)
         if start == 0:
-            print(f"[DEBUG] First batch: id_batch has {len(id_batch)} frames, "
-                  f"outputs has {len(outputs)} frames, empty_frame_list={empty_frame_list}")
+            print(f"[DEBUG] First batch: id_batch={len(id_batch)} frames, "
+                  f"outputs={len(outputs)} frames, empty={empty_frame_list}")
             print(f"[DEBUG] First batch mask IDs: {sorted(batch_mask_ids)}")
 
         num_empty = 0
         for bi in range(len(batch_images)):
             frame_name = os.path.basename(batch_images[bi])[:-4]
+            frame_idx = int(frame_name)
+
             if bi in empty_frame_list:
                 num_empty += 1
-                frames.append({"frame": frame_name, "people": [], "obj_ids": []})
+                valid_frames.append({"frame": frame_name, "people": [], "obj_ids": []})
                 continue
 
             out_list = outputs[bi - num_empty]
             ids = id_batch[bi - num_empty]
-            
-            # DEBUG: Check for mismatch between model outputs and mask IDs
-            if ids is not None and len(out_list) != len(ids):
-                mismatch_info = {
-                    "frame": frame_name,
-                    "mask_ids": list(ids) if ids else [],
-                    "num_model_outputs": len(out_list),
-                    "num_mask_ids": len(ids) if ids else 0,
-                }
-                id_mismatch_frames.append(mismatch_info)
-                if len(id_mismatch_frames) <= 5:  # Log first 5 mismatches
-                    print(f"[DEBUG] ID MISMATCH in {frame_name}: "
-                          f"mask has {len(ids)} IDs {ids}, model output has {len(out_list)} people")
-            
+
             people = []
             obj_ids = []
             for pid, person in enumerate(out_list):
-                # These are numpy arrays already (process_frames converts to numpy)
-                # Get consecutive ID from mask, then convert to actual PID
                 if ids is not None and pid < len(ids):
                     consecutive_id = int(ids[pid])
                 else:
                     consecutive_id = int(pid + 1)
-                actual_pid = to_actual_pid(consecutive_id)
+                actual_pid = to_actual_pid(consecutive_id, frame_idx)
                 obj_ids.append(actual_pid)
-                # keep only "raw param" fields we need for Stage3
                 people.append(
                     {
-                        "obj_id": actual_pid,  # Store actual PID
+                        "obj_id": actual_pid,
                         "global_rot": person.get("global_rot", None),
                         "body_pose": person.get("body_pose_params", None),
                         "hand": person.get("hand_pose_params", None),
@@ -276,24 +298,53 @@ def main() -> None:
                     }
                 )
 
-            frames.append({"frame": frame_name, "people": people, "obj_ids": obj_ids})
+            valid_frames.append({"frame": frame_name, "people": people, "obj_ids": obj_ids})
             all_output_ids.update(obj_ids)
 
-    # DEBUG: Print summary of ID tracking
+    # --------------- Fill corrupted frames by interpolation ---------------
+    # Place valid results at their original positions, then fill gaps with
+    # the most recent valid frame's output (forward-fill).
+    all_frames: List[Optional[Dict[str, Any]]] = [None] * n
+    for vi, frame_result in enumerate(valid_frames):
+        all_frames[valid_indices[vi]] = frame_result
+
+    last_valid_result: Optional[Dict[str, Any]] = None
+    num_interpolated = 0
+    for i in range(n):
+        if all_frames[i] is not None:
+            last_valid_result = all_frames[i]
+        else:
+            frame_name = os.path.basename(images_list[i])[:-4]
+            if last_valid_result is not None:
+                interpolated = copy.deepcopy(last_valid_result)
+                interpolated["frame"] = frame_name
+                interpolated["interpolated"] = True
+                all_frames[i] = interpolated
+            else:
+                all_frames[i] = {
+                    "frame": frame_name,
+                    "people": [],
+                    "obj_ids": [],
+                    "interpolated": True,
+                }
+            num_interpolated += 1
+
+    frames: List[Dict[str, Any]] = [f for f in all_frames if f is not None]
+
+    if num_interpolated > 0:
+        print(f"[INFO] Interpolated {num_interpolated} corrupted frames from nearest valid neighbor")
+
+    # Print summary
     print(f"\n[DEBUG] === ID TRACKING SUMMARY ===")
-    print(f"[DEBUG] Total unique IDs from masks (id_batch): {len(all_mask_ids)}")
-    print(f"[DEBUG] Mask IDs: {sorted(all_mask_ids)}")
-    print(f"[DEBUG] Total unique IDs in output: {len(all_output_ids)}")
-    print(f"[DEBUG] Output IDs: {sorted(all_output_ids)}")
+    print(f"[DEBUG] Total frames: {n} (valid: {n_valid}, corrupted/interpolated: {num_interpolated})")
+    print(f"[DEBUG] Unique IDs from masks: {sorted(all_mask_ids)}")
+    print(f"[DEBUG] Unique IDs in output:  {sorted(all_output_ids)}")
     missing_ids = all_mask_ids - all_output_ids
     extra_ids = all_output_ids - all_mask_ids
     if missing_ids:
         print(f"[DEBUG] MISSING IDs (in masks but not output): {sorted(missing_ids)}")
     if extra_ids:
         print(f"[DEBUG] EXTRA IDs (in output but not masks): {sorted(extra_ids)}")
-    print(f"[DEBUG] Frames with ID count mismatch: {len(id_mismatch_frames)}")
-    if id_mismatch_frames:
-        print(f"[DEBUG] First mismatch details: {id_mismatch_frames[0]}")
     print(f"[DEBUG] ==============================\n")
 
     out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
@@ -305,13 +356,14 @@ def main() -> None:
             "camera_intrinsics": camera_intrinsics_path,
             "camera_scale": float(args.camera_scale),
             "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
-            "consecutive_to_actual": consecutive_to_actual,
+            "segment_id_mappings": segment_id_mappings,
+            "num_corrupted_interpolated": num_interpolated,
         },
     }
     save_raw_mhr(out_path, payload)
     print(f"[INFO] Saved raw params to: {out_path}")
-    if consecutive_to_actual:
-        print(f"[INFO] IDs converted from consecutive to actual PIDs using mapping.")
+    if segment_id_mappings:
+        print(f"[INFO] IDs converted using per-segment mappings ({len(segment_id_mappings)} segments).")
 
     mem = cuda_mem_snapshot()
     mem["wall_time_sec"] = float(time.time() - t0)

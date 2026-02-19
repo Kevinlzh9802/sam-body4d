@@ -314,9 +314,9 @@ def main():
         raise FileNotFoundError(f"Annotation folder not found: {annotation_folder}")
     print(f"[INFO] Annotation folder: {annotation_folder}")
 
-    # ID mapping built incrementally as we process each segment
-    consecutive_to_actual: Dict[int, int] = {}
-    actual_to_consecutive: Dict[int, int] = {}
+    # Per-segment ID mappings (each segment gets its own consecutive -> actual mapping)
+    segment_id_mappings: List[Dict[str, Any]] = []
+    all_actual_ids: set = set()
 
     # Output dir
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -380,16 +380,16 @@ def main():
         )
         predictor.clear_all_points_in_video(inference_state)
 
+        # Per-segment mapping (fresh for each segment — IDs start from 1)
+        seg_c2a: Dict[int, int] = {}
+
         # Add box prompts (at local frame 0) using bboxes from JSON (real_id, x, y, w, h)
         out_obj_ids: List[int] = []
-        for bbox_entry in seg_bbox_entries:
+        for i, bbox_entry in enumerate(seg_bbox_entries):
             actual_pid = int(bbox_entry.get("real_id", 0))
-            consecutive_id = actual_to_consecutive.get(actual_pid)
-            if consecutive_id is None:
-                # New person not in initial mapping — extend mapping
-                consecutive_id = max(consecutive_to_actual.keys(), default=0) + 1
-                consecutive_to_actual[consecutive_id] = actual_pid
-                actual_to_consecutive[actual_pid] = consecutive_id
+            consecutive_id = i + 1
+            seg_c2a[consecutive_id] = actual_pid
+            all_actual_ids.add(actual_pid)
 
             x = float(bbox_entry.get("x", 0))
             y = float(bbox_entry.get("y", 0))
@@ -409,6 +409,7 @@ def main():
 
         out_obj_ids = sorted(list(set(int(x) for x in out_obj_ids)))
         print(f"[INFO]   Tracking {len(out_obj_ids)} object(s): {out_obj_ids}")
+        print(f"[INFO]   Segment mapping: {seg_c2a}")
 
         # Run propagation and save (with global frame numbering)
         vis_frames, num_saved = save_masklets(
@@ -423,6 +424,14 @@ def main():
         all_vis_frames.extend(vis_frames)
 
         print(f"[INFO]   Saved {num_saved} frames for segment {seg_idx}.")
+
+        # Record per-segment mapping with frame range
+        segment_id_mappings.append({
+            "segment_key": segment_key,
+            "frame_start": cumulative_frame_offset,
+            "frame_end": cumulative_frame_offset + num_saved - 1,
+            "consecutive_to_actual": {str(k): v for k, v in seg_c2a.items()},
+        })
 
         # Free GPU memory before loading next segment
         del inference_state
@@ -442,20 +451,20 @@ def main():
     print("[INFO] Extracting bounding boxes from masks...")
     mask_bbox_data = extract_bboxes_from_masks(
         os.path.join(output_dir, "masks"),
-        consecutive_to_actual=consecutive_to_actual,
+        segment_id_mappings=segment_id_mappings,
     )
     mask_bbox_path = os.path.join(output_dir, "mask_bbox.json")
     write_json(mask_bbox_path, mask_bbox_data)
     print(f"[INFO] Saved mask bounding boxes to: {mask_bbox_path}")
 
-    # Save ID mapping
+    # Save per-segment ID mapping
     id_mapping = {
-        "consecutive_to_actual": {str(k): v for k, v in consecutive_to_actual.items()},
-        "actual_to_consecutive": {str(k): v for k, v in actual_to_consecutive.items()},
+        "segments": segment_id_mappings,
+        "all_actual_ids": sorted(all_actual_ids),
     }
     id_mapping_path = os.path.join(output_dir, "id_mapping.json")
     write_json(id_mapping_path, id_mapping)
-    print(f"[INFO] Saved ID mapping to: {id_mapping_path}")
+    print(f"[INFO] Saved per-segment ID mapping to: {id_mapping_path}")
 
     # Save metadata
     meta = {
@@ -470,11 +479,11 @@ def main():
         "height": height,
         "num_segments": len(segment_paths),
         "segment_paths": [os.path.abspath(p) for p in segment_paths],
-        "out_obj_ids": sorted(list(consecutive_to_actual.keys())),
+        "out_obj_ids": sorted(all_actual_ids),
         "image_dir": os.path.join(os.path.abspath(output_dir), "images"),
         "masks_dir": os.path.join(os.path.abspath(output_dir), "masks"),
         "id_mapping_path": id_mapping_path,
-        "consecutive_to_actual": consecutive_to_actual,
+        "segment_id_mappings": segment_id_mappings,
     }
     write_json(os.path.join(output_dir, "masklets_meta.json"), meta)
 
