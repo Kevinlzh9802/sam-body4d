@@ -61,6 +61,7 @@ from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 from utils.extract_mesh_ground_info import run_extract_ground_info
+from utils.plot_ground_info import run_plot_ground_info
 
 
 def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
@@ -423,9 +424,10 @@ def main() -> None:
     print(f"[INFO] Exported smoothed meshes to: {mesh_dir}")
 
     # Extract 2D ground-plane info (positions + orientations) from keypoints; save one pkl (+ csv) per output folder (world space only)
+    ground_rows: List[Dict[str, Any]] = []
     if extr is not None:
         try:
-            _pkl = run_extract_ground_info(
+            _pkl, ground_rows = run_extract_ground_info(
                 keypoints3d_local=j3d.detach().cpu().numpy(),
                 pred_cam_t=pred_cam_t.detach().cpu().numpy(),
                 extr=extr,
@@ -443,6 +445,20 @@ def main() -> None:
                 print(f"[INFO] Saved ground-plane info: {_pkl}")
         except Exception as e:
             print(f"[WARN] Ground-plane info extraction failed: {e}")
+
+    # Plot ground-plane positions and orientations every 200 frames (before zipping)
+    if ground_rows:
+        try:
+            plot_dir = run_plot_ground_info(
+                rows=ground_rows,
+                frame_names=frame_names,
+                output_dir=out_dir,
+                frame_interval=200,
+                plot_subdir="ground_plane_plots",
+            )
+            print(f"[INFO] Saved ground-plane plots: {plot_dir}")
+        except Exception as e:
+            print(f"[WARN] Ground-plane plotting failed: {e}")
 
     # Zip meshes_4d_individual into one archive and remove original .ply files (reduces inode count)
     if not args.no_zip_meshes:

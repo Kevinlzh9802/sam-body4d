@@ -229,7 +229,7 @@ def run_extract_ground_info(
     output_dir: str,
     basename: str = "ground_plane_info",
     device: Optional[Any] = None,
-) -> Optional[str]:
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """
     Convert keypoints to world xy (cm), extract ground info, save to output_dir.
 
@@ -238,7 +238,7 @@ def run_extract_ground_info(
     world_scale: scale to apply before cam_to_world (e.g. 100 for m->cm).
     device: used when extr is not None so tensors match extr's device.
 
-    Returns path to saved pkl, or None if skipped (e.g. no extrinsics).
+    Returns (pkl_path, rows) or (None, []) if skipped (e.g. no extrinsics).
     """
     import torch
     keypoints3d_local_t = torch.from_numpy(
@@ -264,4 +264,4 @@ def run_extract_ground_info(
     )
     os.makedirs(output_dir, exist_ok=True)
     pkl_path, csv_path = save_ground_info(rows, output_dir, basename=basename)
-    return pkl_path
+    return pkl_path, rows
