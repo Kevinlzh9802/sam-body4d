@@ -262,18 +262,25 @@ def main() -> None:
         if device.type == "cuda":
             torch.cuda.empty_cache()
     
-    # Concatenate all batches
-    verts = torch.cat(verts_list, dim=0).to(device)
-    j3d = torch.cat(j3d_list, dim=0).to(device)
+    # Concatenate all batches — verts stays on CPU (~18 GB for large sequences), j3d is small enough for GPU
+    verts = torch.cat(verts_list, dim=0)          # CPU — (T*N, V, 3)
+    j3d = torch.cat(j3d_list, dim=0).to(device)   # GPU — (T*N, 70, 3), ~115 MB
     del verts_list, j3d_list
     if device.type == "cuda":
         torch.cuda.empty_cache()
     
-    print(f"[INFO] MHR forward complete: verts shape={verts.shape}, j3d shape={j3d.shape}")
+    print(f"[INFO] MHR forward complete: verts shape={verts.shape} (CPU), j3d shape={j3d.shape} ({j3d.device})")
     
     # Camera system difference (match existing pipeline)
-    verts[..., [1, 2]] *= -1
+    verts[..., [1, 2]] *= -1   # CPU — no GPU memory
     j3d[..., [1, 2]] *= -1
+
+    # Save faces before freeing model, then release GPU memory occupied by model weights (~1-3 GB)
+    faces_np = estimator.faces
+    del estimator, head_pose
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    print("[INFO] Released MHR model from GPU")
 
     # Determine which optimizations to run
     enable_mask_reproj = not args.no_mask_reproj
@@ -385,25 +392,24 @@ def main() -> None:
         print(f"[INFO] Applying world scale factor: {world_scale} (mesh coordinates will be scaled before world transform)")
 
     # Export per frame/per obj_id (only when present)
-    faces_np = estimator.faces
+    # Precompute extrinsics as CPU numpy for mesh export (avoids GPU round-trip per sample)
+    if extr is not None:
+        Rt_np = extr.R.transpose(0, 1).cpu().numpy()   # (3,3)
+        t_np = extr.t.cpu().numpy().reshape(1, 3)       # (1,3)
     for ti in range(T):
         for si, oid in enumerate(obj_ids_all):
             if frame_obj_ids_slots[ti][si] != oid:
                 continue
             bi = ti * N + si
-            v = verts[bi].detach().float().cpu().numpy()
+            v = verts[bi].detach().float().numpy()          # verts already on CPU
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
             
             # Apply camera translation to get camera-space coordinates
             v_cam = v + camt
             
             if extr is not None:
-                # Scale camera-space coordinates before world transformation
-                # (converts SMPL-X meters to extrinsic units, e.g., centimeters)
                 v_cam_scaled = v_cam * world_scale
-                v_cam_t = torch.from_numpy(v_cam_scaled).to(device=device, dtype=torch.float32)
-                v_world = extr.cam_to_world(v_cam_t).cpu().numpy()
-                mesh_vertices = v_world
+                mesh_vertices = (v_cam_scaled - t_np) @ Rt_np  # cam_to_world in numpy
             else:
                 mesh_vertices = v_cam
             

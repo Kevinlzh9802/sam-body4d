@@ -221,6 +221,7 @@ def run_stage3_post_optimizations(
 
         pred_cam_t = mhr["pred_cam_t"].view(T, N, 3).contiguous()
         V = vertices_local.shape[1] if vertices_local.dim() == 3 else vertices_local.numel() // (T * N * 3)
+        # Keep verts_all on whatever device vertices_local is on (may be CPU); move per-person slices to GPU on demand
         verts_all = vertices_local.view(T, N, V, 3).contiguous()
 
         for si, oid in enumerate(obj_ids_all):
@@ -228,8 +229,8 @@ def run_stage3_post_optimizations(
             if int(present.sum().item()) == 0:
                 continue
 
-            t0 = pred_cam_t[:, si, :]  # (T, 3)
-            V_person = verts_all[:, si, :, :]  # (T, V, 3)
+            t0 = pred_cam_t[:, si, :]  # (T, 3) — already on device
+            V_person = verts_all[:, si, :, :].to(device)  # (T, V, 3) — move one person to GPU
             t_opt, metrics = optimize_mask_reprojection(
                 K=K,
                 vertices_local=V_person,
@@ -239,6 +240,7 @@ def run_stage3_post_optimizations(
                 cfg=cfg.mask_reproj_cfg,
             )
             pred_cam_t[:, si, :] = t_opt
+            del V_person
             summary["mask_reproj"][str(oid)] = metrics
 
         mhr["pred_cam_t"] = pred_cam_t.view(T * N, 3)

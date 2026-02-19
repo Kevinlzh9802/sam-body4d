@@ -267,8 +267,8 @@ def plot_reproj_overlays_from_stage3(
                     continue
                 bi = ti * N + si
                 kps_cam = (
-                    keypoints3d_local[bi, :K_body] + pred_cam_t[bi]
-                ).detach().cpu().numpy()
+                    keypoints3d_local[bi, :K_body].detach().cpu() + pred_cam_t[bi].detach().cpu()
+                ).numpy()
                 obs_scale = _pick_obs_scale(
                     K, kps_cam,
                     obs.kp_idx.cpu().numpy(),
@@ -321,10 +321,11 @@ def plot_reproj_overlays_from_stage3(
             if frame_obj_ids_slots[ti][si] != oid:
                 continue
             bi = ti * N + si
-            v_cam = (verts[bi] + pred_cam_t[bi]).detach().cpu().numpy()
+            cam_t_bi = pred_cam_t[bi].detach().cpu()
+            v_cam = (verts[bi].cpu() + cam_t_bi).numpy()
             kps_cam = (
-                keypoints3d_local[bi, :K_body] + pred_cam_t[bi]
-            ).detach().cpu().numpy()
+                keypoints3d_local[bi, :K_body].detach().cpu() + cam_t_bi
+            ).numpy()
             pdata: Dict[str, Any] = {"verts_cam": v_cam, "kps_cam": kps_cam}
             if bboxes_kps_data is not None and obj_id_to_bbox_idx is not None:
                 obs = get_obs_for_person(
