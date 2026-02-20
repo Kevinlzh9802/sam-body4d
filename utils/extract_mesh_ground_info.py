@@ -247,7 +247,8 @@ def run_extract_ground_info(
     pred_cam_t_t = torch.from_numpy(
         np.asarray(pred_cam_t, dtype=np.float32)
     )
-    kp_cam = keypoints3d_local_t + pred_cam_t_t  # (T*N, 70, 3)
+    # pred_cam_t is (T*N, 3); keypoints are (T*N, K, 3) — unsqueeze for broadcast
+    kp_cam = keypoints3d_local_t + pred_cam_t_t.unsqueeze(1)  # (T*N, K, 3)
     if extr is not None:
         dev = getattr(extr.R, "device", device) or device or torch.device("cpu")
         kp_cam = kp_cam.to(dev)

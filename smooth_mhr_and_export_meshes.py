@@ -271,12 +271,16 @@ def main() -> None:
     
     print(f"[INFO] MHR forward complete: verts shape={verts.shape} (CPU), j3d shape={j3d.shape} ({j3d.device})")
     
+    # MHR can return 308 keypoints; clip to 70 (body-only) to match the rest of the pipeline
+    if j3d.shape[1] > 70:
+        j3d = j3d[:, :70].contiguous()
+    
     # Camera system difference (match existing pipeline)
     verts[..., [1, 2]] *= -1   # CPU — no GPU memory
     j3d[..., [1, 2]] *= -1
 
     # Save faces before freeing model, then release GPU memory occupied by model weights (~1-3 GB)
-    faces_np = estimator.faces
+    faces_np = np.asarray(estimator.faces, dtype=np.int32)
     del estimator, head_pose
     if device.type == "cuda":
         torch.cuda.empty_cache()
