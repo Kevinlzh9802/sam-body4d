@@ -188,7 +188,8 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
       --raw "$raw_path_container" \
       --config ${CONFIG_REL:-configs/body4d.yaml} \
       --camera-intrinsics-json "$intrinsic_path_container" \
-      --extrinsics-json "$extrinsics_file_container" ; then
+      --extrinsics-json "$extrinsics_file_container" \
+      --enable-ground ; then
     echo "[INFO] [$idx/$total] folder=$FOLDER_NUM completed successfully."
   else
     echo "[ERROR] [$idx/$total] folder=$FOLDER_NUM FAILED (exit code $?)." >&2
