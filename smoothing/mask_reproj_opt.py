@@ -160,8 +160,9 @@ def optimize_mask_reprojection(
     vertices_local: torch.Tensor,  # (T, V, 3) mesh vertices in local space
     t0: torch.Tensor,          # (T, 3) initial pred_cam_t
     masks: Dict[int, torch.Tensor],  # frame_idx -> (H, W) mask
-    obj_id: int,               # object ID to match
-    cfg: MaskReprojOptConfig,
+    obj_id: int,               # actual person ID (for logging)
+    mask_ids: Optional[Dict[int, int]] = None,  # frame_idx -> consecutive mask pixel ID (if None, use obj_id)
+    cfg: MaskReprojOptConfig = MaskReprojOptConfig(),
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Optimize pred_cam_t to maximize overlap between projected mesh and mask.
@@ -171,7 +172,9 @@ def optimize_mask_reprojection(
         vertices_local: Mesh vertices before translation
         t0: Initial camera translation per frame
         masks: Ground truth masks indexed by frame
-        obj_id: The object ID to match in the masks
+        obj_id: The actual person ID (for logging / fallback)
+        mask_ids: Per-frame mapping from frame_idx to the consecutive mask pixel ID
+                  for this person. If None, obj_id is used as mask pixel ID for all frames.
         cfg: Optimization config
     
     Returns:
@@ -191,8 +194,10 @@ def optimize_mask_reprojection(
     dt = torch.zeros_like(t0, requires_grad=True)
     opt = torch.optim.Adam([dt], lr=float(cfg.lr))
     
-    # Frame indices that have masks
+    # Frame indices that have masks AND a known mask pixel ID for this person
     valid_frames = sorted([ti for ti in masks.keys() if ti < T])
+    if mask_ids is not None:
+        valid_frames = [ti for ti in valid_frames if ti in mask_ids]
     if not valid_frames:
         print(f"[WARN] No valid masks found for obj_id={obj_id}, skipping optimization")
         return t0, {"skipped": True}
@@ -208,6 +213,8 @@ def optimize_mask_reprojection(
         for ti in valid_frames:
             mask = masks[ti]
             H, W = mask.shape
+            # Resolve per-frame mask pixel ID for this person
+            target_id = mask_ids[ti] if mask_ids is not None else obj_id
             
             # Get vertices in camera space
             v_cam = verts_sampled[ti] + t[ti:ti+1]  # (V_sample, 3)
@@ -233,13 +240,13 @@ def optimize_mask_reprojection(
             v_2d_valid = v_2d[in_bounds]
             
             # Loss 1: Vertices should project inside the mask
-            inside = sample_mask_at_points(mask, v_2d_valid, obj_id)
+            inside = sample_mask_at_points(mask, v_2d_valid, target_id)
             # Use soft loss: proportion inside (higher is better, so minimize 1 - ratio)
             inside_ratio = inside.float().mean()
             loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - inside_ratio)
             
             # Loss 2: Mask should be covered by projection
-            coverage = compute_mask_coverage(mask, v_2d_valid, obj_id)
+            coverage = compute_mask_coverage(mask, v_2d_valid, target_id)
             loss_coverage = loss_coverage + (1.0 - coverage)
             
             n_frames += 1

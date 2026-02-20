@@ -166,7 +166,32 @@ def main() -> None:
     if frames is None:
         raise ValueError("Invalid raw payload: missing 'frames'.")
 
-    cfg_path = args.config or payload.get("meta", {}).get("config_path") or os.path.join(REPO_DIR, "configs", "body4d.yaml")
+    # Load per-segment ID mappings (consecutive mask pixel ID <-> actual PID) from raw_mhr metadata.
+    # Also try loading from id_mapping.json alongside raw_mhr.pt as fallback.
+    meta = payload.get("meta", {})
+    segment_id_mappings: Optional[List[Dict[str, Any]]] = meta.get("segment_id_mappings", None)
+    if not segment_id_mappings:
+        id_mapping_path = os.path.join(os.path.dirname(args.raw), "id_mapping.json")
+        if os.path.exists(id_mapping_path):
+            with open(id_mapping_path, "r", encoding="utf-8") as _f:
+                _id_data = json.load(_f)
+            if "segments" in _id_data:
+                segment_id_mappings = [
+                    {"frame_start": int(s["frame_start"]), "frame_end": int(s["frame_end"]),
+                     "consecutive_to_actual": {int(k): int(v) for k, v in s["consecutive_to_actual"].items()}}
+                    for s in _id_data["segments"]
+                ]
+            elif "consecutive_to_actual" in _id_data:
+                segment_id_mappings = [{
+                    "frame_start": 0, "frame_end": 999_999_999,
+                    "consecutive_to_actual": {int(k): int(v) for k, v in _id_data["consecutive_to_actual"].items()},
+                }]
+    if segment_id_mappings:
+        print(f"[INFO] Loaded {len(segment_id_mappings)} segment ID mapping(s) for mask reproj")
+    else:
+        print("[INFO] No segment ID mappings found; mask reproj will use obj_id as mask pixel ID directly")
+
+    cfg_path = args.config or meta.get("config_path") or os.path.join(REPO_DIR, "configs", "body4d.yaml")
     if not os.path.exists(cfg_path):
         cfg_path = os.path.join(REPO_DIR, cfg_path)
     cfg = OmegaConf.load(cfg_path)
@@ -366,6 +391,7 @@ def main() -> None:
             vis_flags=vis_flags,
             keypoints3d_local=j3d,
             vertices_local=verts if enable_mask_reproj else None,
+            segment_id_mappings=segment_id_mappings,
         )
 
         # Apply updated pred_cam_t to verts for export (do not change verts topology)

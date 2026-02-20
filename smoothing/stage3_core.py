@@ -188,6 +188,7 @@ def run_stage3_post_optimizations(
     # required for recompute/projection
     keypoints3d_local: torch.Tensor,  # (T*N, 70, 3) after mhr_forward camera-axis flips, BEFORE adding pred_cam_t
     vertices_local: Optional[torch.Tensor] = None,  # (T*N, V, 3) mesh vertices (for mask reproj)
+    segment_id_mappings: Optional[List[Dict[str, Any]]] = None,  # per-segment actual->consecutive mapping
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
     """
     Apply optional post-optimizations on top of base Option1 smoothing.
@@ -224,10 +225,32 @@ def run_stage3_post_optimizations(
         # Keep verts_all on whatever device vertices_local is on (may be CPU); move per-person slices to GPU on demand
         verts_all = vertices_local.view(T, N, V, 3).contiguous()
 
+        # Build per-frame actual->consecutive reverse mapping for mask pixel lookup.
+        # Masks store consecutive IDs (1,2,3...) while obj_ids_all has actual PIDs.
+        # segment_id_mappings[i] = {frame_start, frame_end, consecutive_to_actual: {consec->actual}}
+        # We invert to actual->consecutive per frame.
+        actual_to_consec_per_frame: Optional[List[Dict[int, int]]] = None
+        if segment_id_mappings:
+            actual_to_consec_per_frame = [{} for _ in range(T)]
+            for seg in segment_id_mappings:
+                inv = {int(v): int(k) for k, v in seg["consecutive_to_actual"].items()}
+                fs, fe = int(seg["frame_start"]), int(seg["frame_end"])
+                for t in range(max(0, fs), min(T, fe + 1)):
+                    actual_to_consec_per_frame[t] = inv
+
         for si, oid in enumerate(obj_ids_all):
             present = torch.tensor([1 if frame_obj_ids_slots[t][si] == oid else 0 for t in range(T)], device=device)
             if int(present.sum().item()) == 0:
                 continue
+
+            # Build per-frame mask pixel ID for this person
+            person_mask_ids: Optional[Dict[int, int]] = None
+            if actual_to_consec_per_frame is not None:
+                person_mask_ids = {}
+                for t in range(T):
+                    mapping = actual_to_consec_per_frame[t]
+                    if oid in mapping:
+                        person_mask_ids[t] = mapping[oid]
 
             t0 = pred_cam_t[:, si, :]  # (T, 3) — already on device
             V_person = verts_all[:, si, :, :].to(device)  # (T, V, 3) — move one person to GPU
@@ -237,6 +260,7 @@ def run_stage3_post_optimizations(
                 t0=t0,
                 masks=masks,
                 obj_id=oid,
+                mask_ids=person_mask_ids,
                 cfg=cfg.mask_reproj_cfg,
             )
             pred_cam_t[:, si, :] = t_opt
