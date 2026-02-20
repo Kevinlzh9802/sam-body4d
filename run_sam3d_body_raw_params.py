@@ -226,6 +226,16 @@ def main() -> None:
     if n_valid == 0:
         raise FileNotFoundError("All images/masks are corrupted — nothing to process.")
 
+    # Plot mask centroids (x, y over frames) as a quick sanity check for Stage 1 + annotations
+    try:
+        from utils.plot_mask_centroids import compute_mask_centroids, plot_mask_centroids
+        centroid_data = compute_mask_centroids(masks_list, to_actual_pid)
+        centroid_plot_path = os.path.join(input_dir, "mask_centroids.png")
+        plot_mask_centroids(centroid_data, centroid_plot_path,
+                           title_prefix="Stage 1 Mask Centroids (real IDs)")
+    except Exception as e:
+        print(f"[WARN] Failed to plot mask centroids: {e}")
+
     # Minimal placeholders expected by process_image_with_mask
     idx_path, idx_dict, mhr_shape_scale_dict, occ_dict = {}, {}, {}, {}
 
