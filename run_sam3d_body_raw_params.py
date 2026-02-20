@@ -357,6 +357,34 @@ def main() -> None:
         print(f"[DEBUG] EXTRA IDs (in output but not masks): {sorted(extra_ids)}")
     print(f"[DEBUG] ==============================\n")
 
+    # --- Save per-segment raw_mhr files for easier debugging ---
+    if segment_id_mappings:
+        seg_dir = os.path.join(input_dir, "raw_mhr_segments")
+        os.makedirs(seg_dir, exist_ok=True)
+        for seg_idx, seg in enumerate(segment_id_mappings):
+            fs, fe = int(seg["frame_start"]), int(seg["frame_end"])
+            seg_frames = [f for f in frames if fs <= int(f["frame"]) <= fe]
+            seg_actual_ids = sorted(set(seg["consecutive_to_actual"].values()))
+            seg_payload = {
+                "frames": seg_frames,
+                "meta": {
+                    "input_dir": input_dir,
+                    "config_path": cfg_path,
+                    "camera_intrinsics": camera_intrinsics_path,
+                    "camera_scale": float(args.camera_scale),
+                    "note": f"Per-segment raw params (segment {seg_idx})",
+                    "segment_id_mappings": [seg],
+                    "segment_index": seg_idx,
+                    "frame_range": [fs, fe],
+                    "actual_ids_in_segment": seg_actual_ids,
+                },
+            }
+            seg_path = os.path.join(seg_dir, f"raw_mhr_seg_{seg_idx}.pt")
+            save_raw_mhr(seg_path, seg_payload)
+            print(f"[INFO] Saved segment {seg_idx} ({len(seg_frames)} frames, "
+                  f"frames [{fs},{fe}], IDs {seg_actual_ids}) -> {seg_path}")
+
+    # --- Save combined raw_mhr.pt (all segments concatenated) ---
     out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
     payload = {
         "frames": frames,
@@ -371,7 +399,7 @@ def main() -> None:
         },
     }
     save_raw_mhr(out_path, payload)
-    print(f"[INFO] Saved raw params to: {out_path}")
+    print(f"[INFO] Saved combined raw params to: {out_path}")
     if segment_id_mappings:
         print(f"[INFO] IDs converted using per-segment mappings ({len(segment_id_mappings)} segments).")
 
