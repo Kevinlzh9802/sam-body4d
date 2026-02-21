@@ -19,13 +19,12 @@ from PIL import Image
 
 @dataclass
 class MaskReprojOptConfig:
-    iters: int = 150
-    lr: float = 0.02
+    iters: int = 200
+    lr: float = 0.01
     lambda_vertex_in_mask: float = 1.0  # projected vertices should be inside mask
-    lambda_mask_coverage: float = 0.5   # mask should be covered by projection
-    lambda_prior: float = 0.1           # don't deviate too much from initial
-    lambda_vel: float = 1.0             # temporal smoothness (1st order: penalise velocity)
-    lambda_accel: float = 0.5           # temporal smoothness (2nd order: penalise acceleration / jitter)
+    lambda_prior: float = 0.05          # don't deviate too much from initial
+    lambda_vel: float = 0.5             # temporal smoothness (1st order: penalise velocity)
+    lambda_accel: float = 2.0           # temporal smoothness (2nd order: penalise acceleration / jitter)
     num_sample_vertices: int = 500      # sample vertices for efficiency (0 = use all)
     mask_scale: float = 1.0             # scale factor if masks are at different resolution
 
@@ -77,81 +76,63 @@ def project_vertices_to_2d(
     return v_2d
 
 
+def _build_soft_mask(
+    mask: torch.Tensor,
+    target_id: int,
+    blur_radius: int = 5,
+) -> torch.Tensor:
+    """
+    Build a soft mask from an integer mask.
+    The binary mask is blurred slightly so that bilinear sampling at edge
+    pixels produces non-zero gradients w.r.t. the sampling coordinates.
+    """
+    binary = (mask == target_id).float()
+    if blur_radius <= 0 or not binary.any():
+        return binary
+    ks = 2 * blur_radius + 1
+    kernel = torch.ones(1, 1, ks, ks, device=mask.device) / (ks * ks)
+    soft = F.conv2d(binary.unsqueeze(0).unsqueeze(0), kernel, padding=blur_radius)
+    return soft.squeeze(0).squeeze(0).clamp(0.0, 1.0)
+
+
+def _sample_soft_mask(
+    soft_mask: torch.Tensor,
+    points_2d: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Differentiably sample a soft mask at 2D points using grid_sample.
+
+    Gradients propagate through *points_2d* into the upstream projection
+    and camera translation, so the optimizer can drive vertices toward the
+    mask interior.
+
+    Args:
+        soft_mask: (H, W) float in [0, 1]
+        points_2d: (N, 2) pixel coordinates (x, y)
+    Returns:
+        (N,) sampled values in [0, 1] with gradients w.r.t. points_2d
+    """
+    H, W = soft_mask.shape
+    grid_x = 2.0 * points_2d[:, 0] / max(W - 1, 1) - 1.0
+    grid_y = 2.0 * points_2d[:, 1] / max(H - 1, 1) - 1.0
+    grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).unsqueeze(0)
+    soft_4d = soft_mask.unsqueeze(0).unsqueeze(0)
+    sampled = F.grid_sample(
+        soft_4d, grid, mode="bilinear", padding_mode="zeros", align_corners=True,
+    )
+    return sampled.reshape(-1)
+
+
 def sample_mask_at_points(
-    mask: torch.Tensor,      # (H, W) integer mask
-    points_2d: torch.Tensor, # (N, 2) pixel coordinates
+    mask: torch.Tensor,
+    points_2d: torch.Tensor,
     target_id: int,
 ) -> torch.Tensor:
-    """
-    Check which 2D points fall inside the mask for a given object ID.
-    Uses nearest-neighbor sampling (no interpolation for integer masks).
-    
-    Returns:
-        (N,) boolean tensor: True if point is inside mask for target_id
-    """
+    """Non-differentiable hard mask check (kept for logging/metrics)."""
     H, W = mask.shape
-    device = mask.device
-    
-    # Clamp to valid pixel range
-    x = points_2d[:, 0].clamp(0, W - 1).long()
-    y = points_2d[:, 1].clamp(0, H - 1).long()
-    
-    # Sample mask values
-    sampled_ids = mask[y, x]
-    
-    # Check if inside target mask
-    inside = (sampled_ids == target_id)
-    return inside
-
-
-def compute_mask_coverage(
-    mask: torch.Tensor,      # (H, W) integer mask
-    points_2d: torch.Tensor, # (N, 2) pixel coordinates
-    target_id: int,
-    grid_size: int = 32,
-) -> torch.Tensor:
-    """
-    Estimate how well the projected points cover the mask.
-    
-    Divides the mask bounding box into a grid and checks coverage.
-    
-    Returns:
-        Scalar coverage ratio (0 to 1)
-    """
-    H, W = mask.shape
-    device = mask.device
-    
-    # Find mask bounding box
-    mask_binary = (mask == target_id)
-    if not mask_binary.any():
-        return torch.tensor(0.0, device=device)
-    
-    ys, xs = torch.where(mask_binary)
-    x_min, x_max = xs.min().item(), xs.max().item()
-    y_min, y_max = ys.min().item(), ys.max().item()
-    
-    if x_max <= x_min or y_max <= y_min:
-        return torch.tensor(0.0, device=device)
-    
-    # Create grid cells
-    cell_w = (x_max - x_min) / grid_size
-    cell_h = (y_max - y_min) / grid_size
-    
-    # Assign points to grid cells
-    px = ((points_2d[:, 0] - x_min) / cell_w).clamp(0, grid_size - 1).long()
-    py = ((points_2d[:, 1] - y_min) / cell_h).clamp(0, grid_size - 1).long()
-    
-    # Count covered cells
-    covered = torch.zeros((grid_size, grid_size), device=device, dtype=torch.bool)
-    valid = (points_2d[:, 0] >= x_min) & (points_2d[:, 0] <= x_max) & \
-            (points_2d[:, 1] >= y_min) & (points_2d[:, 1] <= y_max)
-    
-    if valid.any():
-        covered[py[valid], px[valid]] = True
-    
-    # Coverage ratio
-    coverage = covered.float().mean()
-    return coverage
+    x = points_2d[:, 0].detach().clamp(0, W - 1).long()
+    y = points_2d[:, 1].detach().clamp(0, H - 1).long()
+    return (mask[y, x] == target_id)
 
 
 def optimize_mask_reprojection(
@@ -202,96 +183,116 @@ def optimize_mask_reprojection(
         print(f"[WARN] No valid masks found for obj_id={obj_id}, skipping optimization")
         return t0, {"skipped": True}
     
-    for _ in range(int(cfg.iters)):
+    # Pre-build soft masks (blurred float masks for differentiable sampling)
+    soft_masks: Dict[int, torch.Tensor] = {}
+    for ti in valid_frames:
+        target_id = mask_ids[ti] if mask_ids is not None else obj_id
+        soft_masks[ti] = _build_soft_mask(masks[ti], target_id, blur_radius=5)
+
+    # Approximate pixel-scale factor so regularisation terms are comparable to the
+    # pixel-space data loss. Without this, vel/accel in SMPL-X metres are ~10^6
+    # smaller and effectively ignored.
+    focal = float(max(K[0, 0], K[1, 1]).item())
+    z_mean = float(t0[:, 2].mean().clamp(min=0.5).item())
+    pix_scale = focal / z_mean
+
+    best_loss = float("inf")
+    best_dt = dt.detach().clone()
+
+    for it in range(int(cfg.iters)):
         opt.zero_grad(set_to_none=True)
         t = t0 + dt
-        
+
         loss_vertex_in_mask = torch.tensor(0.0, device=device)
-        loss_coverage = torch.tensor(0.0, device=device)
         n_frames = 0
-        
+
         for ti in valid_frames:
-            mask = masks[ti]
-            H, W = mask.shape
-            # Resolve per-frame mask pixel ID for this person
-            target_id = mask_ids[ti] if mask_ids is not None else obj_id
-            
-            # Get vertices in camera space
-            v_cam = verts_sampled[ti] + t[ti:ti+1]  # (V_sample, 3)
-            
-            # Filter vertices in front of camera
+            smask = soft_masks[ti]
+            H, W = smask.shape
+
+            v_cam = verts_sampled[ti] + t[ti:ti+1]
             in_front = v_cam[:, 2] > 0.1
             if not in_front.any():
                 continue
             v_cam_front = v_cam[in_front]
-            
-            # Project to 2D
+
             v_2d = project_vertices_to_2d(v_cam_front, K)
-            
-            # Scale if mask is at different resolution
             if cfg.mask_scale != 1.0:
                 v_2d = v_2d * cfg.mask_scale
-            
-            # Filter to image bounds
+
             in_bounds = (v_2d[:, 0] >= 0) & (v_2d[:, 0] < W) & \
                         (v_2d[:, 1] >= 0) & (v_2d[:, 1] < H)
             if not in_bounds.any():
                 continue
             v_2d_valid = v_2d[in_bounds]
-            
-            # Loss 1: Vertices should project inside the mask
-            inside = sample_mask_at_points(mask, v_2d_valid, target_id)
-            # Use soft loss: proportion inside (higher is better, so minimize 1 - ratio)
-            inside_ratio = inside.float().mean()
-            loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - inside_ratio)
-            
-            # Loss 2: Mask should be covered by projection
-            coverage = compute_mask_coverage(mask, v_2d_valid, target_id)
-            loss_coverage = loss_coverage + (1.0 - coverage)
-            
+
+            sampled_vals = _sample_soft_mask(smask, v_2d_valid)
+            loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - sampled_vals.mean())
             n_frames += 1
-        
+
         if n_frames == 0:
             continue
-        
+
         loss_vertex_in_mask = loss_vertex_in_mask / n_frames
-        loss_coverage = loss_coverage / n_frames
-        
-        # Prior: don't deviate too much from initial
-        loss_prior = ((t - t0) ** 2).sum(dim=-1).mean()
-        
-        # Temporal smoothness (velocity)
+
+        # Scale regularisation to pixel-equivalent units
+        loss_prior = ((t - t0) ** 2).sum(dim=-1).mean() * (pix_scale ** 2)
+
         loss_vel = torch.tensor(0.0, device=device)
         if T > 1:
             v = t[1:] - t[:-1]
-            loss_vel = (v * v).sum(dim=-1).mean()
-        
-        # Temporal smoothness (acceleration / jitter)
+            loss_vel = (v * v).sum(dim=-1).mean() * (pix_scale ** 2)
+
         loss_accel = torch.tensor(0.0, device=device)
         if T >= 3 and float(cfg.lambda_accel) > 0.0:
             a = t[2:] - 2.0 * t[1:-1] + t[:-2]
-            loss_accel = (a * a).sum(dim=-1).mean()
-        
+            loss_accel = (a * a).sum(dim=-1).mean() * (pix_scale ** 2)
+
         loss = (
             float(cfg.lambda_vertex_in_mask) * loss_vertex_in_mask
-            + float(cfg.lambda_mask_coverage) * loss_coverage
             + float(cfg.lambda_prior) * loss_prior
             + float(cfg.lambda_vel) * loss_vel
             + float(cfg.lambda_accel) * loss_accel
         )
-        
+
         loss.backward()
         opt.step()
-    
+
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            best_dt = dt.detach().clone()
+
+    # Compute final hard metrics for logging
     with torch.no_grad():
-        t_opt = (t0 + dt).detach()
+        t_opt = (t0 + best_dt).detach()
+        hard_inside = 0.0
+        hard_n = 0
+        for ti in valid_frames:
+            target_id = mask_ids[ti] if mask_ids is not None else obj_id
+            v_cam = verts_sampled[ti] + t_opt[ti:ti+1]
+            in_front = v_cam[:, 2] > 0.1
+            if not in_front.any():
+                continue
+            v_2d = project_vertices_to_2d(v_cam[in_front], K)
+            if cfg.mask_scale != 1.0:
+                v_2d = v_2d * cfg.mask_scale
+            H, W = masks[ti].shape
+            in_bounds = (v_2d[:, 0] >= 0) & (v_2d[:, 0] < W) & \
+                        (v_2d[:, 1] >= 0) & (v_2d[:, 1] < H)
+            if not in_bounds.any():
+                continue
+            inside = sample_mask_at_points(masks[ti], v_2d[in_bounds], target_id)
+            hard_inside += inside.float().mean().item()
+            hard_n += 1
+
         metrics = {
-            "loss_vertex_in_mask": float(loss_vertex_in_mask.item()) if n_frames > 0 else 0.0,
-            "loss_coverage": float(loss_coverage.item()) if n_frames > 0 else 0.0,
+            "loss_vertex_in_mask_soft": float(loss_vertex_in_mask.item()) if n_frames > 0 else 0.0,
+            "hard_inside_ratio": hard_inside / max(hard_n, 1),
             "loss_prior": float(loss_prior.item()),
             "loss_vel": float(loss_vel.item()),
             "loss_accel": float(loss_accel.item()),
             "valid_frames": n_frames,
+            "best_loss": best_loss,
         }
-    
+
     return t_opt, metrics

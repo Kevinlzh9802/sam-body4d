@@ -52,7 +52,6 @@ from smoothing.stage3_core import (
 )
 from smoothing.ground_plane_opt import load_extrinsics_json
 from smoothing.feet_z_plot import plot_feet_z_from_stage3
-from smoothing.projection_2d_plot import plot_2d_projections_from_stage3
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.ground_plane_opt import GroundOptConfig
 from smoothing.mask_reproj_opt import MaskReprojOptConfig
@@ -97,16 +96,14 @@ def main() -> None:
     # Mask-based reprojection (default ON) - uses Stage 1 masks
     parser.add_argument("--no-mask-reproj", action="store_true", 
                         help="Disable mask-based reprojection optimization. Default: ON (uses Stage 1 masks).")
-    parser.add_argument("--mask-reproj-iters", type=int, default=150)
-    parser.add_argument("--mask-reproj-lr", type=float, default=0.02)
+    parser.add_argument("--mask-reproj-iters", type=int, default=200)
+    parser.add_argument("--mask-reproj-lr", type=float, default=0.01)
     parser.add_argument("--mask-reproj-lambda-vertex", type=float, default=1.0,
                         help="Weight for vertex-in-mask loss")
-    parser.add_argument("--mask-reproj-lambda-coverage", type=float, default=0.5,
-                        help="Weight for mask coverage loss")
-    parser.add_argument("--mask-reproj-lambda-prior", type=float, default=0.1)
-    parser.add_argument("--mask-reproj-lambda-vel", type=float, default=1.0,
+    parser.add_argument("--mask-reproj-lambda-prior", type=float, default=0.05)
+    parser.add_argument("--mask-reproj-lambda-vel", type=float, default=0.5,
                         help="Weight for velocity smoothness (1st order)")
-    parser.add_argument("--mask-reproj-lambda-accel", type=float, default=0.5,
+    parser.add_argument("--mask-reproj-lambda-accel", type=float, default=2.0,
                         help="Weight for acceleration smoothness (2nd order, reduces jitter)")
     parser.add_argument("--mask-reproj-num-verts", type=int, default=500,
                         help="Number of vertices to sample for mask reproj (0 = use all)")
@@ -346,7 +343,6 @@ def main() -> None:
                 iters=int(args.mask_reproj_iters),
                 lr=float(args.mask_reproj_lr),
                 lambda_vertex_in_mask=float(args.mask_reproj_lambda_vertex),
-                lambda_mask_coverage=float(args.mask_reproj_lambda_coverage),
                 lambda_prior=float(args.mask_reproj_lambda_prior),
                 lambda_vel=float(args.mask_reproj_lambda_vel),
                 lambda_accel=float(args.mask_reproj_lambda_accel),
@@ -520,24 +516,6 @@ def main() -> None:
         except Exception as e:
             print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
         
-        # Plot 2D projections (bird's eye view) every 100 frames
-        projection_2d_dir = os.path.join(out_dir, "projection_2d")
-        try:
-            plot_2d_projections_from_stage3(
-                keypoints3d_local=j3d,
-                pred_cam_t=pred_cam_t,
-                extr=extr,
-                T=T,
-                N=N,
-                obj_ids_all=obj_ids_all,
-                frame_obj_ids_slots=frame_obj_ids_slots,
-                output_dir=projection_2d_dir,
-                frame_interval=100,
-                world_scale=world_scale,
-            )
-        except Exception as e:
-            print(f"[WARN] Failed to generate 2D projection plots: {e}")
-
     # --- Reprojection overlay: projected mesh + keypoints on image + mask --- #
     # Requires camera intrinsics + images directory from the raw payload.
     meta = payload.get("meta", {})

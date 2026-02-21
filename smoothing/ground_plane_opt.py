@@ -44,7 +44,7 @@ class GroundOptConfig:
     lr: float = 0.05
     lambda_prior: float = 0.2
     lambda_vel: float = 1.0
-    lambda_accel: float = 0.5  # acceleration penalty (2nd order smoothness, reduces jitter)
+    lambda_accel: float = 2.0  # acceleration penalty (2nd order smoothness, reduces jitter)
     lambda_plane: float = 5.0
     lambda_slide: float = 1.0
     # Contact detection thresholds (used for slide loss, and plane loss if always_grounded=False)

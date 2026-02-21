@@ -105,7 +105,6 @@ apptainer exec --nv \
     ${MASK_REPROJ_ITERS:+--mask-reproj-iters "$MASK_REPROJ_ITERS"} \
     ${MASK_REPROJ_LR:+--mask-reproj-lr "$MASK_REPROJ_LR"} \
     ${MASK_REPROJ_LAMBDA_VERTEX:+--mask-reproj-lambda-vertex "$MASK_REPROJ_LAMBDA_VERTEX"} \
-    ${MASK_REPROJ_LAMBDA_COVERAGE:+--mask-reproj-lambda-coverage "$MASK_REPROJ_LAMBDA_COVERAGE"} \
     ${MASK_REPROJ_LAMBDA_PRIOR:+--mask-reproj-lambda-prior "$MASK_REPROJ_LAMBDA_PRIOR"} \
     ${MASK_REPROJ_LAMBDA_VEL:+--mask-reproj-lambda-vel "$MASK_REPROJ_LAMBDA_VEL"} \
     ${MASK_REPROJ_LAMBDA_ACCEL:+--mask-reproj-lambda-accel "$MASK_REPROJ_LAMBDA_ACCEL"} \
