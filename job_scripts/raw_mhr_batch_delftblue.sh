@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name="raw_mhr_batch"
 #SBATCH --partition=gpu-a100
-#SBATCH --time=18:00:00
+#SBATCH --time=22:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=8000M
