@@ -6,8 +6,9 @@ Input:
   - raw_mhr.pt produced by run_sam3d_body_raw_params.py
 
 Output:
-  - meshes_4d_individual.zip (archive of <obj_id>/<frame>.ply). Original PLY folder is
-    removed after zipping to avoid too many files. Use --no-zip-meshes to keep the folder.
+  - meshes_4d_individual/<pid>.npz  (one compressed archive per person containing
+    ``vertices`` (T_vis, V, 3) float32, ``faces`` (F, 3) int32, and
+    ``frame_names`` (T_vis,) string array).
 
 Notes:
   - This stage does NOT run the heavy image encoder. It only loads the SAM-3D-Body
@@ -20,13 +21,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import trimesh
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -62,6 +60,7 @@ from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 from utils.extract_mesh_ground_info import run_extract_ground_info
 from utils.plot_ground_info import run_plot_ground_info
+from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
 
 
 def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
@@ -149,8 +148,6 @@ def main() -> None:
                         help="Scale factor to apply to mesh coordinates before world-space transformation. "
                              "Default 100.0 converts SMPL-X meters to centimeters (use if extrinsics are in cm). "
                              "Set to 1.0 if extrinsics are already in meters.")
-    parser.add_argument("--no-zip-meshes", action="store_true",
-                        help="Do not zip meshes_4d_individual into .zip and do not delete PLY files (keep folder as-is).")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
@@ -320,6 +317,11 @@ def main() -> None:
     raw_parent = os.path.dirname(args.raw)  # e.g., <exp>/masklets
     mask_dir = os.path.join(raw_parent, "masks")
 
+    # Auto-extract masks from zip if the directory doesn't exist yet
+    mask_zip = mask_dir + ".zip"
+    if not os.path.isdir(mask_dir) and os.path.isfile(mask_zip):
+        unzip_if_needed(mask_zip, mask_dir)
+
     # Validate required inputs for mask reproj
     if enable_mask_reproj:
         if not os.path.isdir(mask_dir):
@@ -421,43 +423,46 @@ def main() -> None:
     if export_world and world_scale != 1.0:
         print(f"[INFO] Applying world scale factor: {world_scale} (mesh coordinates will be scaled before world transform)")
 
-    # Export per frame/per obj_id (only when present)
-    # Precompute extrinsics as CPU numpy for mesh export (avoids GPU round-trip per sample)
+    # Export per-person NPZ: one compressed archive per obj_id containing
+    # vertices (T_visible, V, 3), faces (F, 3), and frame_names (T_visible,).
+    # Precompute extrinsics as CPU numpy (avoids GPU round-trip per sample).
     if extr is not None:
         Rt_np = extr.R.transpose(0, 1).cpu().numpy()   # (3,3)
         t_np = extr.t.cpu().numpy().reshape(1, 3)       # (1,3)
-    for ti in range(T):
-        for si, oid in enumerate(obj_ids_all):
+
+    for oid in obj_ids_all:
+        si = list(obj_ids_all).index(oid)
+        verts_list_oid: List[np.ndarray] = []
+        names_list_oid: List[str] = []
+        for ti in range(T):
             if frame_obj_ids_slots[ti][si] != oid:
                 continue
             bi = ti * N + si
-            v = verts[bi].detach().float().numpy()          # verts already on CPU
+            v = verts[bi].detach().float().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
-            
-            # Apply camera translation to get camera-space coordinates
             v_cam = v + camt
-            
             if extr is not None:
                 v_cam_scaled = v_cam * world_scale
-                mesh_vertices = (v_cam_scaled - t_np) @ Rt_np  # cam_to_world in numpy
+                mesh_vertices = (v_cam_scaled - t_np) @ Rt_np
             else:
                 mesh_vertices = v_cam
-            
-            # Create mesh directly with transformed vertices (no additional translation)
-            # process=False prevents trimesh from merging duplicate vertices which would
-            # change vertex count and break sequence loading in viewers
-            vertex_colors = np.array([(0.65, 0.74, 0.86, 1.0)] * mesh_vertices.shape[0])
-            mesh = trimesh.Trimesh(
-                mesh_vertices,
-                faces_np.copy(),
-                vertex_colors=vertex_colors,
-                process=False,
-            )
-            obj_out_dir = os.path.join(mesh_dir, str(oid))
-            os.makedirs(obj_out_dir, exist_ok=True)
-            mesh.export(os.path.join(obj_out_dir, f"{frame_names[ti]}.ply"))
+            verts_list_oid.append(mesh_vertices)
+            names_list_oid.append(frame_names[ti])
 
-    print(f"[INFO] Exported smoothed meshes to: {mesh_dir}")
+        if not verts_list_oid:
+            continue
+        verts_stacked = np.stack(verts_list_oid, axis=0).astype(np.float32)
+        npz_path = os.path.join(mesh_dir, f"{oid}.npz")
+        np.savez_compressed(
+            npz_path,
+            vertices=verts_stacked,
+            faces=faces_np,
+            frame_names=np.array(names_list_oid),
+        )
+        print(f"[INFO] Saved {oid}.npz: {verts_stacked.shape[0]} frames, "
+              f"{verts_stacked.shape[1]} verts, {faces_np.shape[0]} faces")
+
+    print(f"[INFO] Exported per-person NPZ archives to: {mesh_dir}")
 
     # Extract 2D ground-plane info (positions + orientations) from keypoints; save one pkl (+ csv) per output folder (world space only)
     ground_rows: List[Dict[str, Any]] = []
@@ -495,24 +500,6 @@ def main() -> None:
             print(f"[INFO] Saved ground-plane plots: {plot_dir}")
         except Exception as e:
             print(f"[WARN] Ground-plane plotting failed: {e}")
-
-    # Zip meshes_4d_individual into one archive and remove original .ply files (reduces inode count)
-    if not args.no_zip_meshes:
-        zip_path = os.path.join(out_dir, "meshes_4d_individual.zip")
-        try:
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for root, _dirs, files in os.walk(mesh_dir):
-                    for f in files:
-                        if not f.endswith(".ply"):
-                            continue
-                        full = os.path.join(root, f)
-                        arcname = os.path.relpath(full, out_dir)
-                        zf.write(full, arcname)
-            print(f"[INFO] Created archive: {zip_path}")
-            shutil.rmtree(mesh_dir)
-            print(f"[INFO] Removed original PLY folder: {mesh_dir}")
-        except Exception as e:
-            print(f"[WARN] Zip/cleanup failed (PLY files left in place): {e}")
 
     # Plot feet z-coordinates in world space (only if extrinsics available)
     if extr is not None:
@@ -557,6 +544,14 @@ def main() -> None:
     input_dir = meta.get("input_dir", "")
     images_dir = os.path.join(input_dir, "images") if input_dir else ""
     masks_dir = os.path.join(input_dir, "masks") if input_dir else ""
+
+    # Auto-extract from zip archives if directories don't exist yet
+    for d in (images_dir, masks_dir):
+        if d:
+            z = d + ".zip"
+            if not os.path.isdir(d) and os.path.isfile(z):
+                unzip_if_needed(z, d)
+
     has_images = images_dir and os.path.isdir(images_dir)
     has_intrinsics = bool(args.camera_intrinsics_json)
 
@@ -605,6 +600,11 @@ def main() -> None:
         if not has_intrinsics:
             reasons.append("--camera-intrinsics-json not provided")
         print(f"[INFO] Skipping reproj overlay: {'; '.join(reasons)}")
+
+    # Clean up extracted images/masks (only if the zip still exists on disk)
+    for d in dict.fromkeys([mask_dir, images_dir, masks_dir]):
+        if d:
+            cleanup_extracted_dir(d)
 
 
 if __name__ == "__main__":

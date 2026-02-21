@@ -1,33 +1,32 @@
 #!/usr/bin/env python3
 """
-Visualize SAM-Body4D mesh sequences stored as per-frame .ply files using aitviewer.
+Visualize SAM-Body4D mesh sequences using aitviewer.
 
-Expected directory structure (as produced by this repo after our object-id folder fix):
-  mesh_4d_individual/
-    2/
-      00000000.ply
-      00000001.ply
-      ...
-    4/
-      ...
+Supported formats (auto-detected):
+
+1. **Per-person NPZ** (preferred, new default from Stage 3):
+     mesh_4d_individual/
+       2.npz          <- vertices (T,V,3), faces (F,3), frame_names (T,)
+       4.npz
+
+2. **Legacy per-frame PLY directories**:
+     mesh_4d_individual/
+       2/
+         00000000.ply
+         ...
+       4/
+         ...
+
+3. **Legacy meshes_4d_individual.zip** (old Stage 3 output):
+     Automatically extracts PLY data from the zip when neither NPZ files
+     nor subdirectories are present.
 
 Usage:
-  # Basic usage (meshes in cm are scaled to meters by default)
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir /path/to/mesh_4d_individual
-  
-  # Select specific person IDs
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --ids 2 4 6 8
-  
-  # With frame stride and limit
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --stride 2 --max_frames 300
-  
-  # If meshes are already in meters (no scaling needed)
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --scale 1.0
-  
-  # If you want XY as ground plane (Z-up) instead of XZ (Y-up SMPL default)
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --swap-yz
-  
-  # Bird's eye view camera
   python scripts/view_mesh_4d_sequence_aitviewer.py --mesh_dir ... --camera top --camera-distance 5
 """
 
@@ -35,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import zipfile
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -51,12 +51,15 @@ def _natural_sort_key(s: str) -> Tuple:
 
 
 def _list_person_ids(mesh_dir: str) -> List[str]:
-    ids = []
+    """Return person IDs from NPZ files or PLY subdirectories."""
+    ids: List[str] = []
     for name in os.listdir(mesh_dir):
         p = os.path.join(mesh_dir, name)
-        if os.path.isdir(p):
+        if name.lower().endswith(".npz") and os.path.isfile(p):
+            ids.append(os.path.splitext(name)[0])
+        elif os.path.isdir(p):
             ids.append(name)
-    return sorted(ids, key=_natural_sort_key)
+    return sorted(set(ids), key=_natural_sort_key)
 
 
 def _load_ply_mesh(path: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -88,6 +91,65 @@ def _load_ply_mesh(path: str) -> Tuple[np.ndarray, np.ndarray]:
     if f.ndim != 2 or f.shape[1] != 3:
         raise ValueError(f"Invalid faces shape {f.shape} in {path}")
     return v, f
+
+
+def _load_sequence_from_npz(
+    npz_path: str,
+    stride: int = 1,
+    max_frames: Optional[int] = None,
+) -> Optional[Tuple[np.ndarray, np.ndarray, List[str]]]:
+    """Load a per-person NPZ archive produced by Stage 3."""
+    data = np.load(npz_path, allow_pickle=False)
+    verts = np.asarray(data["vertices"], dtype=np.float32)   # (T, V, 3)
+    faces = np.asarray(data["faces"], dtype=np.int32)        # (F, 3)
+    frame_names = list(data.get("frame_names", np.arange(verts.shape[0])))
+    if stride > 1:
+        verts = verts[::stride]
+        frame_names = frame_names[::stride]
+    if max_frames is not None:
+        verts = verts[:max_frames]
+        frame_names = frame_names[:max_frames]
+    if verts.shape[0] == 0:
+        return None
+    return verts, faces, [str(n) for n in frame_names]
+
+
+def _ensure_mesh_dir_from_zip(mesh_dir: str) -> str:
+    """
+    If *mesh_dir* is empty (no NPZ, no subdirs) but a sibling
+    ``meshes_4d_individual.zip`` exists, extract PLY data from the zip into
+    *mesh_dir* so the legacy PLY loader can pick it up.
+
+    Returns *mesh_dir* unchanged.
+    """
+    contents = os.listdir(mesh_dir) if os.path.isdir(mesh_dir) else []
+    has_npz = any(f.endswith(".npz") for f in contents)
+    has_subdirs = any(os.path.isdir(os.path.join(mesh_dir, f)) for f in contents)
+    if has_npz or has_subdirs:
+        return mesh_dir
+
+    zip_path = mesh_dir + ".zip"
+    if not os.path.isfile(zip_path):
+        return mesh_dir
+
+    print(f"[INFO] Extracting legacy PLY data from {zip_path} ...")
+    os.makedirs(mesh_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for entry in zf.namelist():
+            if not entry.lower().endswith(".ply"):
+                continue
+            # Archive layout: meshes_4d_individual/<pid>/<frame>.ply
+            parts = entry.replace("\\", "/").split("/")
+            if len(parts) >= 2:
+                rel = os.path.join(*parts[-2:])
+            else:
+                rel = parts[-1]
+            dest = os.path.join(mesh_dir, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(entry) as src, open(dest, "wb") as dst:
+                dst.write(src.read())
+    print(f"[INFO] Extracted PLY data into {mesh_dir}")
+    return mesh_dir
 
 
 def _transform_vertices(
@@ -122,6 +184,23 @@ def _load_sequence_for_person(
     stride: int = 1,
     max_frames: Optional[int] = None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray, List[str]]]:
+    """
+    Load mesh sequence for a single person.
+    Tries NPZ first (``<person_dir>.npz``), then falls back to a directory
+    of per-frame PLY files (``<person_dir>/*.ply``).
+    """
+    # --- NPZ path (preferred) ---
+    npz_path = person_dir + ".npz"
+    if not os.path.isfile(npz_path):
+        npz_path = person_dir  # caller may already pass the .npz path
+    if os.path.isfile(npz_path) and npz_path.lower().endswith(".npz"):
+        return _load_sequence_from_npz(npz_path, stride=stride, max_frames=max_frames)
+
+    # --- Legacy PLY directory ---
+    if not os.path.isdir(person_dir):
+        print(f"[WARN] Neither NPZ nor directory found for: {person_dir} — skipping.")
+        return None
+
     ply_files = [
         os.path.join(person_dir, f)
         for f in os.listdir(person_dir)
@@ -147,15 +226,12 @@ def _load_sequence_for_person(
         if faces_ref is None:
             faces_ref = f
         else:
-            # If faces differ, keep first faces (common for consistent topology).
             if f.shape != faces_ref.shape or not np.array_equal(f, faces_ref):
                 pass
-        # Track expected shape and warn on mismatch
         if expected_verts_shape is None:
             expected_verts_shape = v.shape
         elif v.shape != expected_verts_shape:
             print(f"[ERROR] Vertex shape mismatch in {p}: got {v.shape}, expected {expected_verts_shape}")
-            print(f"        First file had shape {expected_verts_shape}, this file differs.")
             print(f"        Skipping this file to avoid stack error.")
             continue
         verts_seq.append(v)
@@ -245,8 +321,9 @@ def view_single_person_centered(
     View ONE person's mesh sequence, centered per-frame so the chosen center is at the origin.
     """
     person_dir = os.path.join(mesh_dir, str(person_id))
-    if not os.path.isdir(person_dir):
-        raise FileNotFoundError(f"Person folder not found: {person_dir}")
+    npz_path = person_dir + ".npz"
+    if not os.path.isdir(person_dir) and not os.path.isfile(npz_path):
+        raise FileNotFoundError(f"No NPZ or directory found for person: {person_dir}")
 
     seq = _load_sequence_for_person(
         person_dir, stride=max(1, stride), max_frames=max_frames
@@ -350,27 +427,30 @@ def meshes_4d() -> None:
 
     mesh_dir = args.mesh_dir
     if not os.path.isdir(mesh_dir):
-        raise FileNotFoundError(f"--mesh_dir is not a directory: {mesh_dir}")
+        # Try creating the directory from a legacy zip archive
+        zip_candidate = mesh_dir + ".zip" if not mesh_dir.endswith(".zip") else mesh_dir
+        if os.path.isfile(zip_candidate):
+            os.makedirs(mesh_dir, exist_ok=True)
+        else:
+            raise FileNotFoundError(f"--mesh_dir is not a directory: {mesh_dir}")
+
+    _ensure_mesh_dir_from_zip(mesh_dir)
 
     person_ids = args.ids if args.ids else _list_person_ids(mesh_dir)
     if not person_ids:
-        raise ValueError(f"No person folders found in {mesh_dir}")
+        raise ValueError(f"No person IDs (NPZ files or subdirectories) found in {mesh_dir}")
 
     vertices_by_id: Dict[str, np.ndarray] = {}
     faces_by_id: Dict[str, np.ndarray] = {}
 
     for pid in person_ids:
         pdir = os.path.join(mesh_dir, str(pid))
-        if not os.path.isdir(pdir):
-            print(f"[WARN] Skipping missing folder: {pdir}")
-            continue
         seq = _load_sequence_for_person(
             pdir, stride=max(1, args.stride), max_frames=args.max_frames
         )
         if seq is None:
             continue
         verts, faces, used = seq
-        # Apply scale and axis transformation
         verts = _transform_vertices(verts, scale=args.scale, swap_yz=args.swap_yz)
         vertices_by_id[str(pid)] = verts
         faces_by_id[str(pid)] = faces
@@ -521,9 +601,13 @@ def meshes_4d_single_person() -> None:
 
     mesh_dir = args.mesh_dir
     if not os.path.isdir(mesh_dir):
-        raise FileNotFoundError(f"--mesh_dir is not a directory: {mesh_dir}")
+        zip_candidate = mesh_dir + ".zip" if not mesh_dir.endswith(".zip") else mesh_dir
+        if os.path.isfile(zip_candidate):
+            os.makedirs(mesh_dir, exist_ok=True)
+        else:
+            raise FileNotFoundError(f"--mesh_dir is not a directory: {mesh_dir}")
+    _ensure_mesh_dir_from_zip(mesh_dir)
 
-    # >>> add this early-exit branch <<<
     if args.single_id is not None:
         view_single_person_centered(
             mesh_dir=mesh_dir,

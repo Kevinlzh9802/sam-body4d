@@ -46,6 +46,7 @@ from tqdm import tqdm
 from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 from utils.mask_bbox import extract_bboxes_from_masks
+from utils.zip_utils import zip_and_remove_dir
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +487,16 @@ def main():
         "segment_id_mappings": segment_id_mappings,
     }
     write_json(os.path.join(output_dir, "masklets_meta.json"), meta)
+
+    # Zip images/ and masks/ to reduce inode count; later stages will unzip on demand
+    image_dir = os.path.join(output_dir, "images")
+    masks_dir = os.path.join(output_dir, "masks")
+    for d in (image_dir, masks_dir):
+        if os.path.isdir(d):
+            try:
+                zip_and_remove_dir(d)
+            except Exception as e:
+                print(f"[WARN] Failed to zip {d}: {e}")
 
     # GPU memory
     mem = cuda_mem_snapshot()

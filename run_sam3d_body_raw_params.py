@@ -40,6 +40,7 @@ from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask
 from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import save_raw_mhr
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
+from utils.zip_utils import unzip_if_needed, zip_and_remove_dir
 
 
 def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
@@ -108,6 +109,13 @@ def main() -> None:
     input_dir = args.input
     image_dir = os.path.join(input_dir, "images")
     masks_dir = os.path.join(input_dir, "masks")
+
+    # Auto-extract from zip archives produced by Stage 1
+    for d in (image_dir, masks_dir):
+        zip_p = d + ".zip"
+        if not os.path.isdir(d) and os.path.isfile(zip_p):
+            unzip_if_needed(zip_p, d)
+
     if not os.path.isdir(image_dir) or not os.path.isdir(masks_dir):
         raise FileNotFoundError(f"Missing images/ or masks/ in: {input_dir}")
 
@@ -407,6 +415,14 @@ def main() -> None:
     mem["wall_time_sec"] = float(time.time() - t0)
     write_json(os.path.join(input_dir, "gpu_mem_stage2.json"), mem)
     print(f"[INFO] Peak GPU memory (stage2): {mem}")
+
+    # Re-zip images/ and masks/ to reduce inode count for the cluster
+    for d in (image_dir, masks_dir):
+        if os.path.isdir(d):
+            try:
+                zip_and_remove_dir(d)
+            except Exception as e:
+                print(f"[WARN] Failed to zip {d}: {e}")
 
 
 if __name__ == "__main__":
