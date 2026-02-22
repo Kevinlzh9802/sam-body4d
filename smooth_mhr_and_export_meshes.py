@@ -171,7 +171,8 @@ def main() -> None:
                 _id_data = json.load(_f)
             if "segments" in _id_data:
                 segment_id_mappings = [
-                    {"frame_start": int(s["frame_start"]), "frame_end": int(s["frame_end"]),
+                    {"segment_key": s.get("segment_key", ""),
+                     "frame_start": int(s["frame_start"]), "frame_end": int(s["frame_end"]),
                      "consecutive_to_actual": {int(k): int(v) for k, v in s["consecutive_to_actual"].items()}}
                     for s in _id_data["segments"]
                 ]
@@ -566,6 +567,7 @@ def main() -> None:
                 frame_interval=100,
                 bboxes_kps_data=bbox_data,
                 obj_id_to_bbox_idx=oid_to_bidx,
+                segment_id_mappings=segment_id_mappings,
             )
         except Exception as e:
             import traceback

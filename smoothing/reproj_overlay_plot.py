@@ -127,6 +127,7 @@ def render_overlay_frame(
     #            optional "obs_kp_idx": (M,), "obs_xy": (M,2)}}
     frame_name: str,
     obs_scale: float = 1.0,
+    id_labels: Optional[Dict[int, str]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Compose a single diagnostic overlay.  Returns (canvas_bgr, errors)."""
     h, w = image.shape[:2]
@@ -198,6 +199,26 @@ def render_overlay_frame(
                 K, kps, obs_idx, obs_xy, obs_scale,
             )
 
+    # ---- 3b. person ID labels ---------------------------------------------- #
+    if id_labels:
+        for pidx, (oid, pd) in enumerate(sorted(persons.items())):
+            label = id_labels.get(oid)
+            if not label:
+                continue
+            ci = pidx % len(_PAL)
+            col = _bgr(_PAL[ci])
+            v = pd["verts_cam"]
+            uv = _project(K, v)
+            ok = v[:, 2] > 0.01
+            if not ok.any():
+                continue
+            uv_ok = uv[ok]
+            lx = max(0, int(uv_ok[:, 0].min()))
+            ly = max(20, int(uv_ok[:, 1].min()) - 8)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(canvas, (lx - 2, ly - th - 4), (lx + tw + 2, ly + 4), (0, 0, 0), -1)
+            cv2.putText(canvas, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
+
     # ---- 4. header text --------------------------------------------------- #
     errs = [e["error_px"] for ed in frame_errors.values() for e in ed["keypoints"]]
     mean_e = float(np.mean(errs)) if errs else 0.0
@@ -247,6 +268,7 @@ def plot_reproj_overlays_from_stage3(
     obj_id_to_bbox_idx: Optional[Dict[int, int]] = None,
     obs_scale: Optional[float] = None,
     obs_scale_candidates: Tuple[float, ...] = (1.0, 0.5, 2.0),
+    segment_id_mappings: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Plot reprojection overlay images every *frame_interval* frames."""
     os.makedirs(output_dir, exist_ok=True)
@@ -339,6 +361,20 @@ def plot_reproj_overlays_from_stage3(
         if not persons:
             continue
 
+        # Build per-person ID labels from segment mappings (tracking_id -> real_id)
+        frame_id_labels: Optional[Dict[int, str]] = None
+        if segment_id_mappings:
+            frame_idx_int = int(fname)
+            a2c: Dict[int, int] = {}
+            for seg in segment_id_mappings:
+                fs = seg.get("frame_start", 0)
+                fe = seg.get("frame_end", 999_999_999)
+                if fs <= frame_idx_int <= fe:
+                    c2a = seg.get("consecutive_to_actual", {})
+                    a2c = {int(v): int(k) for k, v in c2a.items()}
+                    break
+            frame_id_labels = {oid: f"T:{a2c.get(oid, '?')} R:{oid}" for oid in persons}
+
         canvas_bgr, ferrs = render_overlay_frame(
             image=image,
             mask=mask_arr,
@@ -347,6 +383,7 @@ def plot_reproj_overlays_from_stage3(
             persons=persons,
             frame_name=fname,
             obs_scale=obs_scale,
+            id_labels=frame_id_labels,
         )
         out_path = os.path.join(output_dir, f"{fname}.jpg")
         cv2.imwrite(out_path, canvas_bgr)

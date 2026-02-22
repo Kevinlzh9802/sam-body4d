@@ -128,6 +128,7 @@ def main() -> None:
         if "segments" in id_mapping_data:
             for seg in id_mapping_data["segments"]:
                 segment_id_mappings.append({
+                    "segment_key": seg.get("segment_key", ""),
                     "frame_start": int(seg["frame_start"]),
                     "frame_end": int(seg["frame_end"]),
                     "consecutive_to_actual": {int(k): int(v) for k, v in seg["consecutive_to_actual"].items()},
@@ -305,6 +306,7 @@ def main() -> None:
                 people.append(
                     {
                         "obj_id": actual_pid,
+                        "tracking_id": consecutive_id,
                         "global_rot": person.get("global_rot", None),
                         "body_pose": person.get("body_pose_params", None),
                         "hand": person.get("hand_pose_params", None),
@@ -365,6 +367,37 @@ def main() -> None:
         print(f"[DEBUG] EXTRA IDs (in output but not masks): {sorted(extra_ids)}")
     print(f"[DEBUG] ==============================\n")
 
+    # --- Save mesh prediction summary every 200 frames ---
+    def _find_segment_key_for_frame(frame_idx: int) -> str:
+        for seg in segment_id_mappings:
+            if seg["frame_start"] <= frame_idx <= seg["frame_end"]:
+                return seg.get("segment_key", "")
+        return ""
+
+    summary_rows = []
+    for frame_data in frames:
+        frame_name = frame_data["frame"]
+        frame_idx = int(frame_name)
+        if frame_idx % 200 != 0:
+            continue
+        people = frame_data.get("people", [])
+        summary_rows.append({
+            "frame_name": frame_name,
+            "frame_idx": frame_idx,
+            "segment_key": _find_segment_key_for_frame(frame_idx),
+            "num_people": len(people),
+            "interpolated": frame_data.get("interpolated", False),
+            "people": [
+                {"tracking_id": p.get("tracking_id", -1), "real_id": p.get("obj_id", -1)}
+                for p in people
+            ],
+        })
+
+    if summary_rows:
+        summary_path = os.path.join(input_dir, "mesh_prediction_summary.json")
+        write_json(summary_path, {"frame_summaries": summary_rows})
+        print(f"[INFO] Saved mesh prediction summary ({len(summary_rows)} frames @ 200-frame interval) to: {summary_path}")
+
     # --- Save per-segment raw_mhr files for easier debugging ---
     if segment_id_mappings:
         seg_dir = os.path.join(input_dir, "raw_mhr_segments")
@@ -387,9 +420,11 @@ def main() -> None:
                     "actual_ids_in_segment": seg_actual_ids,
                 },
             }
-            seg_path = os.path.join(seg_dir, f"raw_mhr_seg_{seg_idx}.pt")
+            seg_key = seg.get("segment_key", "")
+            seg_label = f"{seg_idx}_{seg_key}" if seg_key else str(seg_idx)
+            seg_path = os.path.join(seg_dir, f"raw_mhr_seg_{seg_label}.pt")
             save_raw_mhr(seg_path, seg_payload)
-            print(f"[INFO] Saved segment {seg_idx} ({len(seg_frames)} frames, "
+            print(f"[INFO] Saved segment {seg_idx} / {seg_key} ({len(seg_frames)} frames, "
                   f"frames [{fs},{fe}], IDs {seg_actual_ids}) -> {seg_path}")
 
     # --- Save combined raw_mhr.pt (all segments concatenated) ---
