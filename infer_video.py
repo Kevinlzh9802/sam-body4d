@@ -42,15 +42,8 @@ from models.diffusion_vas.demo import (
 )
 from utils.proj_utils import build_pred_cam_t_debug_record
 from utils.image_utils import save_sanity_first_frame_overlay
-
-def build_sam3_from_config(cfg):
-    """Construct SAM-3 model from config."""
-    from models.sam3.sam3.model_builder import build_sam3_video_model
-    
-    sam3_model = build_sam3_video_model(checkpoint_path=cfg.sam3['ckpt_path'])
-    predictor = sam3_model.tracker
-    predictor.backbone = sam3_model.detector.backbone
-    return sam3_model, predictor
+from utils.camera_utils import adjust_K, read_camera_intrinsics, read_camera_intrinsics_new
+from utils.model_factory import build_sam3_from_config
 
 
 def build_sam3_3d_body_config(cfg, device):
@@ -97,22 +90,6 @@ def read_video_metadata(path: str):
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
     return fps, total
-
-
-def read_camera_intrinsics_new(intrinsic_file: str):
-    with open(intrinsic_file, "r") as f:
-        intrinsic_data = json.load(f)
-        params = intrinsic_data['Calibration']['cameras'][0]['model']['ptr_wrapper']['data']['parameters']
-
-        f = params['f']['val']
-        cx = params['cx']['val']
-        cy = params['cy']['val']
-        
-        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
-        ks = [params[f'k{i}']['val'] for i in range(1, 5)]
-        dist_coeffs = np.array(ks)
-
-    return K, dist_coeffs
 
 
 def mask_generation(video_path: str, predictor, inference_state, output_dir, fps, out_obj_ids):
@@ -499,21 +476,6 @@ def generate_4d(output_dir, estimator, out_obj_ids, batch_size, fps,
     print(f"[INFO] 4D video saved to: {out_4d_path}")
     
     return out_4d_path
-
-def read_camera_intrinsics(intrinsic_file: str, scale):
-    with open(intrinsic_file, "r") as f:
-        intrinsic_data = json.load(f)
-        K = np.array(intrinsic_data["intrinsic"])
-        dist_coeffs = np.array(intrinsic_data["distortion_coefficients"])
-        # Scale K to match 0.5x resolution images fed to SAM3D
-        K = adjust_K(K, scale=scale)
-    return K, dist_coeffs
-
-def adjust_K(K, scale):
-    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
-             [0,           K[1,1]*scale, K[1,2]*scale],
-             [0,           0,         1]])
-    return K_resized
 
 def load_bbox_kp(bbox_kp_folder: str, folder_name: str):
     """

@@ -44,49 +44,10 @@ import sys
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(REPO_DIR, "models", "sam_3d_body"))
 
-from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask
 from models.sam_3d_body.sam_3d_body.visualization.renderer import Renderer
-
-
-def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
-    return np.array(
-        [
-            [K[0, 0] * scale, 0, K[0, 2] * scale],
-            [0, K[1, 1] * scale, K[1, 2] * scale],
-            [0, 0, 1],
-        ],
-        dtype=np.float32,
-    )
-
-
-def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarray, np.ndarray]:
-    with open(intrinsic_file, "r", encoding="utf-8") as f:
-        intrinsic_data = json.load(f)
-    K = np.array(intrinsic_data["intrinsic"], dtype=np.float32)
-    dist_coeffs = np.array(intrinsic_data.get("distortion_coefficients", []), dtype=np.float32)
-    return adjust_K(K, scale=scale), dist_coeffs
-
-
-def build_sam3d_body_from_config(cfg, device: torch.device) -> SAM3DBodyEstimator:
-    mhr_path = cfg.sam_3d_body.get("mhr_path", "")
-    fov_path = cfg.sam_3d_body.get("fov_path", "")
-    model, model_cfg = load_sam_3d_body(cfg.sam_3d_body["ckpt_path"], device=device, mhr_path=mhr_path)
-
-    from models.sam_3d_body.tools.build_fov_estimator import FOVEstimator
-
-    fov_estimator = None
-    if fov_path:
-        fov_estimator = FOVEstimator(name="moge2", device=device, path=fov_path)
-
-    estimator = SAM3DBodyEstimator(
-        sam_3d_body_model=model,
-        model_cfg=model_cfg,
-        human_detector=None,
-        human_segmentor=None,
-        fov_estimator=fov_estimator,
-    )
-    return estimator
+from utils.camera_utils import adjust_K, read_camera_intrinsics
+from utils.model_factory import build_sam3d_body_from_config
 
 
 def _huber(x: torch.Tensor, delta: float) -> torch.Tensor:

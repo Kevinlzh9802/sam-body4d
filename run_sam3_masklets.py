@@ -27,25 +27,8 @@ from utils import mask_painter, images_to_mp4, DAVIS_PALETTE
 from utils.image_utils import load_bbox_kp
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 from utils.mask_bbox import extract_bboxes_from_masks
-
-
-def read_video_metadata(path: str) -> Tuple[float, int, int, int]:
-    cap = cv2.VideoCapture(path)
-    fps = float(cap.get(cv2.CAP_PROP_FPS))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    return fps, total, width, height
-
-
-def build_sam3_from_config(cfg):
-    from models.sam3.sam3.model_builder import build_sam3_video_model
-
-    sam3_model = build_sam3_video_model(checkpoint_path=cfg.sam3["ckpt_path"])
-    predictor = sam3_model.tracker
-    predictor.backbone = sam3_model.detector.backbone
-    return sam3_model, predictor
+from utils.model_factory import build_sam3_from_config
+from utils.video_utils import read_video_metadata
 
 
 def _parse_boxes(box_strs: List[str]) -> List[Tuple[int, int, np.ndarray]]:

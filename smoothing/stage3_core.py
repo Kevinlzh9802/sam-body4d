@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,41 +36,8 @@ class Stage3Config:
     ground_cfg: GroundOptConfig = field(default_factory=GroundOptConfig)
 
 
-def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarray, np.ndarray]:
-    with open(intrinsic_file, "r", encoding="utf-8") as f:
-        intrinsic_data = json.load(f)
-    K = np.array(intrinsic_data["intrinsic"], dtype=np.float32)
-    dist_coeffs = np.array(intrinsic_data.get("distortion_coefficients", []), dtype=np.float32)
-    K = np.array(
-        [
-            [K[0, 0] * scale, 0, K[0, 2] * scale],
-            [0, K[1, 1] * scale, K[1, 2] * scale],
-            [0, 0, 1],
-        ],
-        dtype=np.float32,
-    )
-    return K, dist_coeffs
-
-def read_camera_intrinsics_new(intrinsic_file: str):
-    with open(intrinsic_file, "r") as f:
-        intrinsic_data = json.load(f)
-        params = intrinsic_data['Calibration']['cameras'][0]['model']['ptr_wrapper']['data']['parameters']
-
-        f = params['f']['val']
-        cx = params['cx']['val']
-        cy = params['cy']['val']
-        
-        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
-        ks = [params[f'k{i}']['val'] for i in range(1, 5)]
-        dist_coeffs = np.array(ks)
-
-    return K, dist_coeffs
-
-def adjust_K(K, scale):
-    K_resized = np.array([[K[0,0]*scale, 0,           K[0,2]*scale],
-             [0,           K[1,1]*scale, K[1,2]*scale],
-             [0,           0,         1]])
-    return K_resized
+# Re-export from canonical location for backward compatibility
+from utils.camera_utils import read_camera_intrinsics, read_camera_intrinsics_new, adjust_K
 
 def stack_frames_to_tensors(
     frames: List[Dict[str, Any]],
