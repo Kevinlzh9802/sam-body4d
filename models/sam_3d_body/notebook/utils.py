@@ -351,20 +351,16 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             if mask_binary_cp.max() == 0:   # margin objects
                 mask_binary = mask_binary_cp
 
-            mask_list.append(mask_binary)
-            # Compute bounding box from mask (required by refactored code)
-            # Find all non-zero pixels in the mask
-            coords = cv2.findNonZero(mask_binary)
-            
+            # Only append mask/bbox if not margin-filtered
+            # This ensures mask_list/bbox_list indices align with id_current
             if mask_binary.max() > 0:
                 id_current.append(obj_id)
-
-            # Get bounding box from mask contours
-            x, y, w, h = cv2.boundingRect(coords)
-            bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
-
-            # print(f"Computed bbox from mask: {bbox[0]}")
-            bbox_list.append(bbox)
+                mask_list.append(mask_binary)
+                # Compute bounding box from mask (required by refactored code)
+                coords = cv2.findNonZero(mask_binary)
+                x, y, w, h = cv2.boundingRect(coords)
+                bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
+                bbox_list.append(bbox)
 
         if len(bbox_list) == 0:
             empty_frame_list.append(i)
