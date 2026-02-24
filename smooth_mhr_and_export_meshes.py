@@ -72,10 +72,12 @@ def run_batched_mhr_forward(
     head_pose = estimator.model.head_pose
     global_rot = mhr["global_rot"]
     body_pose = mhr["body_pose"]
-    hand = mhr.get("hand") or torch.zeros((T * N, 108), dtype=torch.float32, device=device)
+    _hand = mhr.get("hand")
+    hand = _hand if _hand is not None else torch.zeros((T * N, 108), dtype=torch.float32, device=device)
     scale = mhr["scale"]
     shape = mhr["shape"]
-    face = mhr.get("face") or torch.zeros((T * N, 72), dtype=torch.float32, device=device)
+    _face = mhr.get("face")
+    face = _face if _face is not None else torch.zeros((T * N, 72), dtype=torch.float32, device=device)
 
     total_samples = T * N
     print(f"[INFO] Running MHR forward in batches: {total_samples} samples, batch_size={batch_size}")
