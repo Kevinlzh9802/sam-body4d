@@ -163,16 +163,26 @@ def save_mesh_prediction_summary(
             continue
         people = frame_data.get("people", [])
         seg = find_segment_for_frame(frame_idx, segment_id_mappings) if segment_id_mappings else None
+        
+        people_in_mask = frame_data.get("people_in_mask", [])
+        people_sent_to_model = frame_data.get("people_sent_to_model", [])
+        excluded = frame_data.get("excluded", [])
+        
         summary_rows.append({
             "frame_name": frame_name,
             "frame_idx": frame_idx,
             "segment_key": seg.get("segment_key", "") if seg else "",
-            "num_people": len(people),
+            "num_people_in_mask": len(people_in_mask),
+            "num_people_sent_to_model": len(people_sent_to_model),
+            "num_mesh_predictions": len(people),
+            "num_excluded": len(excluded),
             "interpolated": frame_data.get("interpolated", False),
-            "people": [
+            "people_in_mask": people_in_mask,
+            "people_with_predictions": [
                 {"tracking_id": p.get("tracking_id", -1), "real_id": p.get("obj_id", -1)}
                 for p in people
             ],
+            "excluded": excluded,
         })
 
     if summary_rows:
@@ -331,20 +341,46 @@ def main() -> None:
             frame_name = os.path.basename(batch_images[bi])[:-4]
             frame_idx = int(frame_name)
 
+            # Load original mask to track all people
+            mask_path = batch_masks[bi]
+            mask = np.array(Image.open(mask_path).convert('P'))
+            mask_obj_ids = sorted(np.unique(mask)[np.unique(mask) != 0].astype(int).tolist())
+            people_in_mask = [
+                {"tracking_id": cid, "real_id": to_actual_pid(cid, frame_idx, segment_id_mappings)}
+                for cid in mask_obj_ids
+            ]
+
             if bi in empty_frame_list:
                 num_empty += 1
-                valid_frames.append({"frame": frame_name, "people": [], "obj_ids": []})
+                excluded = [
+                    {**p, "reason": "margin_filtered"} for p in people_in_mask
+                ]
+                valid_frames.append({
+                    "frame": frame_name,
+                    "people": [],
+                    "obj_ids": [],
+                    "people_in_mask": people_in_mask,
+                    "excluded": excluded,
+                })
                 continue
 
             out_list = outputs[bi - num_empty]
             ids = id_batch[bi - num_empty]
 
+            # Track people sent to model
+            people_sent_to_model = [
+                {"tracking_id": cid, "real_id": to_actual_pid(cid, frame_idx, segment_id_mappings)}
+                for cid in (ids if ids is not None else [])
+            ]
+
             people = []
             obj_ids = []
+            prediction_tracking_ids = set()
             for pid, person in enumerate(out_list):
                 consecutive_id = int(ids[pid]) if ids is not None and pid < len(ids) else int(pid + 1)
                 actual_pid = to_actual_pid(consecutive_id, frame_idx, segment_id_mappings)
                 obj_ids.append(actual_pid)
+                prediction_tracking_ids.add(consecutive_id)
                 people.append({
                     "obj_id": actual_pid,
                     "tracking_id": consecutive_id,
@@ -358,7 +394,30 @@ def main() -> None:
                     "focal_length": person.get("focal_length", None),
                 })
 
-            valid_frames.append({"frame": frame_name, "people": people, "obj_ids": obj_ids})
+            # Determine exclusions
+            mask_tracking_ids = set(mask_obj_ids)
+            sent_tracking_ids = set(ids if ids is not None else [])
+            
+            margin_filtered = [
+                {**p, "reason": "margin_filtered"}
+                for p in people_in_mask
+                if p["tracking_id"] not in sent_tracking_ids
+            ]
+            model_failed = [
+                {**p, "reason": "model_failed"}
+                for p in people_sent_to_model
+                if p["tracking_id"] not in prediction_tracking_ids
+            ]
+            excluded = margin_filtered + model_failed
+
+            valid_frames.append({
+                "frame": frame_name,
+                "people": people,
+                "obj_ids": obj_ids,
+                "people_in_mask": people_in_mask,
+                "people_sent_to_model": people_sent_to_model,
+                "excluded": excluded,
+            })
             all_output_ids.update(obj_ids)
 
     # Interpolate corrupted frames
