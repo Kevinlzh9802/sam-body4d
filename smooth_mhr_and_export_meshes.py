@@ -14,6 +14,7 @@ Output:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,7 +68,7 @@ def run_batched_mhr_forward(
 ) -> Tuple[torch.Tensor, torch.Tensor, np.ndarray]:
     """Run MHR forward in batches, return ``(verts_cpu, j3d_device, faces_np)``.
 
-    Also releases the estimator/model from GPU after forward is complete.
+    The caller is responsible for deleting ``estimator`` afterward to free GPU memory.
     """
     head_pose = estimator.model.head_pose
     global_rot = mhr["global_rot"]
@@ -123,10 +124,8 @@ def run_batched_mhr_forward(
     j3d[..., [1, 2]] *= -1
 
     faces_np = np.asarray(estimator.faces, dtype=np.int32)
-    del estimator, head_pose
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-    print("[INFO] Released MHR model from GPU")
+    # NOTE: do NOT `del estimator` here — it only drops the local reference.
+    # The caller must delete its own reference to actually free GPU memory.
     return verts, j3d, faces_np
 
 
@@ -362,6 +361,11 @@ def main() -> None:
     verts, j3d, faces_np = run_batched_mhr_forward(
         estimator, mhr, device, int(args.mhr_batch_size), T, N,
     )
+    del estimator
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    print("[INFO] Released MHR model from GPU")
     pred_cam_t = mhr.get("pred_cam_t", None)
 
     # Post-optimizations
