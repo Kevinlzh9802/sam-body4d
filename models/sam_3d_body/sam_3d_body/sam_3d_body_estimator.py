@@ -95,7 +95,16 @@ class SAM3DBodyEstimator:
                 - hand: inference with hand decoder only (only hand output)
         """
 
-        max_N = max(t.shape[0] for t in bboxes)
+        # Build a global ID-to-slot mapping from all unique tracking IDs
+        # across the batch. This avoids the broken assumption that IDs are
+        # consecutive integers 1..max_N.
+        all_ids_sorted = []
+        if id_batch is not None:
+            _all_ids = set()
+            for _ids in id_batch:
+                _all_ids.update(_ids)
+            all_ids_sorted = sorted(_all_ids)
+        max_N = len(all_ids_sorted) if all_ids_sorted else max(t.shape[0] for t in bboxes)
 
         # clear all cached results
         self.batch = None
@@ -169,16 +178,21 @@ class SAM3DBodyEstimator:
                 masks, masks_score = None, None
 
         #################### Construct batch data samples ####################
-            if len(boxes) < max_N:  # padding if no objects detected
+            # Remap boxes/masks into the global slot layout (one slot per
+            # unique tracking ID in all_ids_sorted).  This must run for EVERY
+            # frame — not just those with fewer people than max_N — because
+            # the slot positions depend on the global ID order, not the
+            # per-frame insertion order.
+            if all_ids_sorted and id_batch is not None:
                 padding_box = boxes[0]
                 padding_mask = masks_binary[0]
                 boxes_to_cat = []
                 masks_to_cat = []
                 scores_to_cat = [] if masks_score is not None else None
-                current_id_batch = id_batch[i]
+                current_id_set = set(id_batch[i])
                 cid = 0
-                for current_id in range(max_N):
-                    if (current_id+1) in current_id_batch:
+                for oid in all_ids_sorted:
+                    if oid in current_id_set:
                         boxes_to_cat.append(boxes[cid])
                         masks_to_cat.append(masks_binary[cid])
                         if scores_to_cat is not None:
@@ -187,14 +201,12 @@ class SAM3DBodyEstimator:
                     else:
                         boxes_to_cat.append(padding_box)
                         masks_to_cat.append(padding_mask)
-                        # Padded entries are not real persons; set low confidence if used.
                         if scores_to_cat is not None:
                             scores_to_cat.append(np.float32(0.0))
                 boxes = np.stack(boxes_to_cat, axis=0)
                 masks_binary = np.stack(masks_to_cat, axis=0)
                 if scores_to_cat is not None:
                     masks_score = np.asarray(scores_to_cat, dtype=np.float32)
-                # e.g., 1 2 4 5 6 -> 1 2 [1] 4 5 6
             img_com_dict = {}
             for idx_k, (idx_start,idx_end) in idx_dict.items():
                 if i >= idx_start and i < idx_end:
@@ -272,8 +284,10 @@ class SAM3DBodyEstimator:
         num_objects = batch_dict["img"].shape[1]
         for b_idx in range(batch_dict["img"].shape[0]):    # batch 
             all_out = []
+            id_set_b = set(id_batch[b_idx]) if id_batch is not None else set()
             for idx in range(batch_dict["img"].shape[1]):    # person
-                if (idx+1) not in id_batch[b_idx]:
+                oid = all_ids_sorted[idx] if idx < len(all_ids_sorted) else None
+                if oid is None or oid not in id_set_b:
                     continue
                 all_out.append(
                     {
