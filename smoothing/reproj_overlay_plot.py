@@ -128,6 +128,7 @@ def render_overlay_frame(
     frame_name: str,
     obs_scale: float = 1.0,
     id_labels: Optional[Dict[int, str]] = None,
+    oid_to_mask_id: Optional[Dict[int, int]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Compose a single diagnostic overlay.  Returns (canvas_bgr, errors)."""
     h, w = image.shape[:2]
@@ -162,6 +163,22 @@ def render_overlay_frame(
         ci = pidx % len(_PAL)
         mc, _ = cv2.findContours(msk, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(canvas, mc, -1, _bgr(_PAL[ci]), 1)
+
+    # ---- 2b. mask-vs-mesh silhouette IoU per person ---------------------- #
+    if mask is not None:
+        for oid, mesh_msk in mesh_masks.items():
+            mask_pixel_id = oid_to_mask_id.get(oid, oid) if oid_to_mask_id else oid
+            det_bin = (mask == mask_pixel_id).astype(np.uint8)
+            mesh_bin = (mesh_msk > 0).astype(np.uint8)
+            inter = int((det_bin & mesh_bin).sum())
+            union = int((det_bin | mesh_bin).sum())
+            iou = inter / union if union > 0 else 0.0
+            oid_key = str(oid)
+            if oid_key not in frame_errors:
+                frame_errors[oid_key] = {}
+            frame_errors[oid_key]["mask_mesh_iou"] = round(iou, 4)
+            frame_errors[oid_key]["mask_area_px"] = int(det_bin.sum())
+            frame_errors[oid_key]["mesh_area_px"] = int(mesh_bin.sum())
 
     # ---- 3. projected keypoints + observed keypoints + error lines -------- #
     for pidx, (oid, pd) in enumerate(sorted(persons.items())):
@@ -361,8 +378,9 @@ def plot_reproj_overlays_from_stage3(
         if not persons:
             continue
 
-        # Build per-person ID labels from segment mappings (tracking_id -> real_id)
+        # Build per-person ID labels and mask-pixel-ID mapping from segment mappings
         frame_id_labels: Optional[Dict[int, str]] = None
+        oid_to_mask_id: Optional[Dict[int, int]] = None
         if segment_id_mappings:
             frame_idx_int = int(fname)
             a2c: Dict[int, int] = {}
@@ -374,6 +392,7 @@ def plot_reproj_overlays_from_stage3(
                     a2c = {int(v): int(k) for k, v in c2a.items()}
                     break
             frame_id_labels = {oid: f"T:{a2c.get(oid, '?')} R:{oid}" for oid in persons}
+            oid_to_mask_id = a2c  # actual PID → consecutive (mask pixel) ID
 
         canvas_bgr, ferrs = render_overlay_frame(
             image=image,
@@ -384,6 +403,7 @@ def plot_reproj_overlays_from_stage3(
             frame_name=fname,
             obs_scale=obs_scale,
             id_labels=frame_id_labels,
+            oid_to_mask_id=oid_to_mask_id,
         )
         out_path = os.path.join(output_dir, f"{fname}.jpg")
         cv2.imwrite(out_path, canvas_bgr)
