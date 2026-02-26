@@ -22,10 +22,12 @@ class MaskReprojOptConfig:
     iters: int = 200
     lr: float = 0.01
     lambda_vertex_in_mask: float = 1.0  # projected vertices should be inside mask
+    lambda_mask_coverage: float = 0.5   # mask pixels should be covered by projected mesh
     lambda_prior: float = 0.05          # don't deviate too much from initial
     lambda_vel: float = 0.5             # temporal smoothness (1st order: penalise velocity)
     lambda_accel: float = 2.0           # temporal smoothness (2nd order: penalise acceleration / jitter)
     num_sample_vertices: int = 500      # sample vertices for efficiency (0 = use all)
+    num_sample_mask_points: int = 200   # mask points to sample for coverage loss (0 = disable)
     mask_scale: float = 1.0             # scale factor if masks are at different resolution
 
 
@@ -135,6 +137,27 @@ def sample_mask_at_points(
     return (mask[y, x] == target_id)
 
 
+def _sample_points_from_mask(
+    mask: torch.Tensor,
+    target_id: int,
+    num_points: int,
+) -> Optional[torch.Tensor]:
+    """
+    Uniformly sample 2D pixel coordinates from the mask region for a given ID.
+
+    Returns (num_points, 2) float tensor of (x, y) pixel coords, or None if the
+    mask region is empty.
+    """
+    ys, xs = (mask == target_id).nonzero(as_tuple=True)
+    if len(xs) == 0:
+        return None
+    if num_points >= len(xs):
+        idx = torch.arange(len(xs), device=mask.device)
+    else:
+        idx = torch.randperm(len(xs), device=mask.device)[:num_points]
+    return torch.stack([xs[idx].float(), ys[idx].float()], dim=-1)
+
+
 def optimize_mask_reprojection(
     *,
     K: torch.Tensor,           # (3, 3) intrinsic matrix
@@ -189,6 +212,17 @@ def optimize_mask_reprojection(
         target_id = mask_ids[ti] if mask_ids is not None else obj_id
         soft_masks[ti] = _build_soft_mask(masks[ti], target_id, blur_radius=5)
 
+    # Pre-sample 2D points from each mask region for the coverage loss.
+    # These are fixed across iterations (re-sampling each iter is too noisy).
+    use_coverage = float(cfg.lambda_mask_coverage) > 0.0 and cfg.num_sample_mask_points > 0
+    mask_sample_pts: Dict[int, torch.Tensor] = {}
+    if use_coverage:
+        for ti in valid_frames:
+            target_id = mask_ids[ti] if mask_ids is not None else obj_id
+            pts = _sample_points_from_mask(masks[ti], target_id, cfg.num_sample_mask_points)
+            if pts is not None:
+                mask_sample_pts[ti] = pts
+
     # Approximate pixel-scale factor so regularisation terms are comparable to the
     # pixel-space data loss. Without this, vel/accel in SMPL-X metres are ~10^6
     # smaller and effectively ignored.
@@ -204,7 +238,9 @@ def optimize_mask_reprojection(
         t = t0 + dt
 
         loss_vertex_in_mask = torch.tensor(0.0, device=device)
+        loss_coverage = torch.tensor(0.0, device=device)
         n_frames = 0
+        n_coverage = 0
 
         for ti in valid_frames:
             smask = soft_masks[ti]
@@ -230,10 +266,24 @@ def optimize_mask_reprojection(
             loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - sampled_vals.mean())
             n_frames += 1
 
+            # Coverage: mask points should be close to projected vertices.
+            # For each sampled mask pixel, find min distance to any projected
+            # vertex. This pulls the mesh (via pred_cam_t) to cover the mask.
+            if use_coverage and ti in mask_sample_pts:
+                mp = mask_sample_pts[ti]                     # (M, 2)
+                dists = torch.cdist(mp.unsqueeze(0), v_2d_valid.unsqueeze(0)).squeeze(0)  # (M, Vv)
+                min_dists = dists.min(dim=1).values          # (M,)
+                # Normalize by image diagonal so the loss scale is resolution-independent
+                diag = (H * H + W * W) ** 0.5
+                loss_coverage = loss_coverage + (min_dists / diag).mean()
+                n_coverage += 1
+
         if n_frames == 0:
             continue
 
         loss_vertex_in_mask = loss_vertex_in_mask / n_frames
+        if n_coverage > 0:
+            loss_coverage = loss_coverage / n_coverage
 
         # Scale regularisation to pixel-equivalent units
         loss_prior = ((t - t0) ** 2).sum(dim=-1).mean() * (pix_scale ** 2)
@@ -250,6 +300,7 @@ def optimize_mask_reprojection(
 
         loss = (
             float(cfg.lambda_vertex_in_mask) * loss_vertex_in_mask
+            + float(cfg.lambda_mask_coverage) * loss_coverage
             + float(cfg.lambda_prior) * loss_prior
             + float(cfg.lambda_vel) * loss_vel
             + float(cfg.lambda_accel) * loss_accel
@@ -287,6 +338,7 @@ def optimize_mask_reprojection(
 
         metrics = {
             "loss_vertex_in_mask_soft": float(loss_vertex_in_mask.item()) if n_frames > 0 else 0.0,
+            "loss_coverage": float(loss_coverage.item()) if n_coverage > 0 else 0.0,
             "hard_inside_ratio": hard_inside / max(hard_n, 1),
             "loss_prior": float(loss_prior.item()),
             "loss_vel": float(loss_vel.item()),

@@ -274,11 +274,16 @@ def main() -> None:
     parser.add_argument("--no-mask-reproj", action="store_true", help="Disable mask-based reprojection optimization.")
     parser.add_argument("--mask-reproj-iters", type=int, default=200)
     parser.add_argument("--mask-reproj-lr", type=float, default=0.01)
-    parser.add_argument("--mask-reproj-lambda-vertex", type=float, default=1.0)
+    parser.add_argument("--mask-reproj-lambda-vertex", type=float, default=1.0,
+                        help="Weight for vertex-in-mask loss (vertices should project inside mask)")
+    parser.add_argument("--mask-reproj-lambda-coverage", type=float, default=0.5,
+                        help="Weight for mask coverage loss (mask pixels should be near projected vertices)")
     parser.add_argument("--mask-reproj-lambda-prior", type=float, default=0.05)
     parser.add_argument("--mask-reproj-lambda-vel", type=float, default=0.5)
     parser.add_argument("--mask-reproj-lambda-accel", type=float, default=2.0)
     parser.add_argument("--mask-reproj-num-verts", type=int, default=500)
+    parser.add_argument("--mask-reproj-num-mask-pts", type=int, default=200,
+                        help="Number of mask points to sample for coverage loss (0 = disable)")
     # Legacy keypoint-based reprojection (default OFF)
     parser.add_argument("--enable-kps-reproj", action="store_true")
     parser.add_argument("--bbox-kps-pkl", default=None)
@@ -396,10 +401,12 @@ def main() -> None:
             mask_reproj_cfg=MaskReprojOptConfig(
                 iters=int(args.mask_reproj_iters), lr=float(args.mask_reproj_lr),
                 lambda_vertex_in_mask=float(args.mask_reproj_lambda_vertex),
+                lambda_mask_coverage=float(args.mask_reproj_lambda_coverage),
                 lambda_prior=float(args.mask_reproj_lambda_prior),
                 lambda_vel=float(args.mask_reproj_lambda_vel),
                 lambda_accel=float(args.mask_reproj_lambda_accel),
                 num_sample_vertices=int(args.mask_reproj_num_verts),
+                num_sample_mask_points=int(args.mask_reproj_num_mask_pts),
             ),
             bbox_kps_pkl=args.bbox_kps_pkl,
             camera_intrinsics_json=args.camera_intrinsics_json,
