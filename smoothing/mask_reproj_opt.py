@@ -266,16 +266,25 @@ def optimize_mask_reprojection(
             loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - sampled_vals.mean())
             n_frames += 1
 
-            # Coverage: mask points should be close to projected vertices.
-            # For each sampled mask pixel, find min distance to any projected
-            # vertex. This pulls the mesh (via pred_cam_t) to cover the mask.
+            # Coverage: projected mesh should match the mask in position and
+            # scale.  Uses centroid + bbox-extent matching instead of the full
+            # pairwise distance matrix (torch.cdist) which blows up the
+            # autograd graph when accumulated over hundreds of frames.
             if use_coverage and ti in mask_sample_pts:
                 mp = mask_sample_pts[ti]                     # (M, 2)
-                dists = torch.cdist(mp.unsqueeze(0), v_2d_valid.unsqueeze(0)).squeeze(0)  # (M, Vv)
-                min_dists = dists.min(dim=1).values          # (M,)
-                # Normalize by image diagonal so the loss scale is resolution-independent
-                diag = (H * H + W * W) ** 0.5
-                loss_coverage = loss_coverage + (min_dists / diag).mean()
+                diag_sq = float(H * H + W * W)
+
+                # Centroid alignment (position)
+                v_center = v_2d_valid.mean(dim=0)            # (2,)
+                m_center = mp.mean(dim=0)                    # (2,) const
+                cov_centroid = ((v_center - m_center) ** 2).sum() / diag_sq
+
+                # Bounding-box extent alignment (scale)
+                v_ext = v_2d_valid.max(dim=0).values - v_2d_valid.min(dim=0).values
+                m_ext = mp.max(dim=0).values - mp.min(dim=0).values
+                cov_extent = ((v_ext - m_ext) ** 2).sum() / diag_sq
+
+                loss_coverage = loss_coverage + cov_centroid + cov_extent
                 n_coverage += 1
 
         if n_frames == 0:
