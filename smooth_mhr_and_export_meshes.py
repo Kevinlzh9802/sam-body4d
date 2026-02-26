@@ -52,6 +52,7 @@ from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
 from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
+from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +343,14 @@ def main() -> None:
     mhr, frame_obj_ids_slots, vis_flags, frame_names, obj_ids_all = stack_frames_to_tensors(frames, device=device)
     T, N = len(frame_names), len(obj_ids_all)
     print(f"[INFO] Loaded raw: T={T}, N={N}, obj_ids={obj_ids_all[:10]}{'...' if N>10 else ''}")
+
+    # Diagnostics: visualise raw pred_cam_t before any smoothing
+    diag_dir = os.path.join(out_dir, "diagnostics")
+    run_pred_cam_t_diagnostics(
+        mhr=mhr, frame_obj_ids_slots=frame_obj_ids_slots,
+        frame_names=frame_names, obj_ids_all=obj_ids_all,
+        segment_id_mappings=segment_id_mappings, out_dir=diag_dir, label="raw",
+    )
 
     # Option 1 smoothing
     if not args.no_option1:
