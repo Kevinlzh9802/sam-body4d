@@ -55,14 +55,17 @@ from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
+from utils.extract_mesh_ground_info import run_extract_ground_info
 from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
+from utils.plot_ground_info import run_plot_ground_info
 from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
 from smooth_mhr_and_export_meshes import (
     run_batched_mhr_forward,
     export_per_person_meshes,
+    generate_reproj_overlays,
 )
 
 
@@ -118,12 +121,16 @@ def process_one_segment(
     raw_parent: str,
     out_dir: str,
     seg_idx: int,
-) -> Dict[int, Dict[str, Any]]:
+) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
     """
     Run full Stage 3 on one segment's frames.
 
-    Returns dict: obj_id -> {"vertices": (T_vis, V, 3), "faces": (F, 3),
-                              "frame_names": list[str]}
+    Returns:
+        mesh_results: obj_id -> {"vertices": (T_vis, V, 3), "faces": (F, 3),
+                                  "frame_names": list[str]}
+        tensor_data:  dict with post-optimization tensors on CPU for combined
+                      plotting (j3d, pred_cam_t, verts, faces_np, frame_names,
+                      obj_ids_all, frame_obj_ids_slots, T, N).
     """
     seg_key = seg_info.get("segment_key", f"seg{seg_idx}")
     fs = int(seg_info["frame_start"])
@@ -141,7 +148,7 @@ def process_one_segment(
 
     if T == 0 or N == 0:
         print(f"[WARN] Empty segment {seg_key}, skipping")
-        return {}
+        return {}, None
 
     # Option 1 smoothing
     if not args.no_option1:
@@ -261,13 +268,24 @@ def process_one_segment(
                 "faces": faces_np,
             }
 
-    # Free segment tensors
+    # Move tensors to CPU for combined plotting; free GPU copies
+    seg_tensor_data = {
+        "j3d": j3d.detach().cpu(),
+        "pred_cam_t": pred_cam_t.detach().cpu() if isinstance(pred_cam_t, torch.Tensor) else pred_cam_t,
+        "verts": verts.detach().cpu(),
+        "faces_np": faces_np,
+        "frame_names": list(frame_names),
+        "obj_ids_all": list(obj_ids_all),
+        "frame_obj_ids_slots": [list(s) for s in frame_obj_ids_slots],
+        "T": T,
+        "N": N,
+    }
     del mhr, verts, j3d, pred_cam_t
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    return results
+    return results, seg_tensor_data
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +344,84 @@ def concatenate_and_export(
               f"{verts_stacked.shape[1]} verts")
 
     print(f"[INFO] Exported per-person NPZ archives to: {mesh_dir}")
+
+
+# ---------------------------------------------------------------------------
+# Reassemble per-segment tensors for combined plotting
+# ---------------------------------------------------------------------------
+
+def reassemble_full_sequence(
+    all_segment_data: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Merge per-segment post-optimization tensors into a single (T_total, N_all)
+    tensor layout suitable for the plotting functions (feet_z, ground_plane,
+    reproj_overlay) that expect full-sequence inputs.
+    """
+    non_empty = [sd for sd in all_segment_data if sd is not None]
+    if not non_empty:
+        return {}
+
+    all_oids: set = set()
+    for sd in non_empty:
+        all_oids.update(sd["obj_ids_all"])
+    obj_ids_all = sorted(all_oids)
+    N_all = len(obj_ids_all)
+    oid_to_slot = {oid: i for i, oid in enumerate(obj_ids_all)}
+
+    first = non_empty[0]
+    J = first["j3d"].shape[1]
+    V = first["verts"].shape[1]
+    faces_np = first["faces_np"]
+
+    all_j3d, all_pct, all_verts = [], [], []
+    all_frame_names: List[str] = []
+    all_frame_obj_ids: List[List[int]] = []
+    T_total = 0
+
+    for sd in non_empty:
+        T_seg, N_seg = sd["T"], sd["N"]
+        seg_oids = sd["obj_ids_all"]
+        seg_slots = sd["frame_obj_ids_slots"]
+
+        seg_j3d = sd["j3d"].view(T_seg, N_seg, J, 3)
+        seg_pct = sd["pred_cam_t"]
+        if seg_pct.dim() == 2:
+            seg_pct = seg_pct.view(T_seg, N_seg, 3)
+        seg_verts = sd["verts"].view(T_seg, N_seg, V, 3)
+
+        full_j3d = torch.zeros(T_seg, N_all, J, 3)
+        full_pct = torch.zeros(T_seg, N_all, 3)
+        full_verts = torch.zeros(T_seg, N_all, V, 3)
+
+        for ti in range(T_seg):
+            global_ids = [0] * N_all
+            for si_local, oid in enumerate(seg_oids):
+                gi = oid_to_slot[oid]
+                if seg_slots[ti][si_local] == oid:
+                    global_ids[gi] = oid
+                    full_j3d[ti, gi] = seg_j3d[ti, si_local]
+                    full_pct[ti, gi] = seg_pct[ti, si_local]
+                    full_verts[ti, gi] = seg_verts[ti, si_local]
+            all_frame_obj_ids.append(global_ids)
+
+        all_frame_names.extend(sd["frame_names"])
+        all_j3d.append(full_j3d.reshape(T_seg * N_all, J, 3))
+        all_pct.append(full_pct.reshape(T_seg * N_all, 3))
+        all_verts.append(full_verts.reshape(T_seg * N_all, V, 3))
+        T_total += T_seg
+
+    return {
+        "j3d": torch.cat(all_j3d, dim=0),
+        "pred_cam_t": torch.cat(all_pct, dim=0),
+        "verts": torch.cat(all_verts, dim=0),
+        "faces_np": faces_np,
+        "frame_names": all_frame_names,
+        "obj_ids_all": obj_ids_all,
+        "frame_obj_ids_slots": all_frame_obj_ids,
+        "T": T_total,
+        "N": N_all,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -418,8 +514,9 @@ def main() -> None:
 
     # Process each segment
     all_segment_results: List[Dict[int, Dict[str, Any]]] = []
+    all_segment_tensors: List[Optional[Dict[str, Any]]] = []
     for seg_idx, (seg_info, seg_frames) in enumerate(segment_splits):
-        seg_results = process_one_segment(
+        seg_results, seg_tensors = process_one_segment(
             seg_info=seg_info,
             seg_frames=seg_frames,
             estimator=estimator,
@@ -431,6 +528,7 @@ def main() -> None:
             seg_idx=seg_idx,
         )
         all_segment_results.append(seg_results)
+        all_segment_tensors.append(seg_tensors)
 
     # Release model
     del estimator
@@ -452,7 +550,7 @@ def main() -> None:
     if not export_world:
         print("[INFO] Exporting meshes in CAMERA coordinates")
 
-    # Concatenate and export
+    # Concatenate and export meshes
     mesh_dir = os.path.join(out_dir, "meshes_4d_individual")
     concatenate_and_export(
         all_segment_results=all_segment_results,
@@ -461,6 +559,92 @@ def main() -> None:
         export_world=export_world,
         mesh_dir=mesh_dir,
     )
+
+    # ------------------------------------------------------------------
+    # Combined plots (feet_z, ground plane, reproj overlay)
+    # ------------------------------------------------------------------
+    combined = reassemble_full_sequence(all_segment_tensors)
+    del all_segment_tensors
+    gc.collect()
+
+    if not combined:
+        print("[WARN] No segment data to plot")
+    else:
+        T_all = combined["T"]
+        N_all = combined["N"]
+        j3d_all = combined["j3d"]
+        pred_cam_t_all = combined["pred_cam_t"]
+        verts_all = combined["verts"]
+        faces_np = combined["faces_np"]
+        frame_names_all = combined["frame_names"]
+        obj_ids_all_combined = combined["obj_ids_all"]
+        frame_obj_ids_all = combined["frame_obj_ids_slots"]
+
+        world_scale = float(args.world_scale)
+
+        # Feet z-coordinate plot
+        if extr is not None:
+            try:
+                plot_feet_z_from_stage3(
+                    keypoints3d_local=j3d_all, pred_cam_t=pred_cam_t_all, extr=extr,
+                    T=T_all, N=N_all, obj_ids_all=obj_ids_all_combined,
+                    frame_obj_ids_slots=frame_obj_ids_all,
+                    output_path=os.path.join(out_dir, "feet_z_world.png"),
+                    title="Feet Z (World) — Per-Segment Stage 3",
+                    world_scale=world_scale,
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
+
+        # Ground-plane info + plots
+        ground_rows: List[Dict[str, Any]] = []
+        if extr is not None:
+            try:
+                _pkl, ground_rows = run_extract_ground_info(
+                    keypoints3d_local=j3d_all.detach().cpu().numpy(),
+                    pred_cam_t=pred_cam_t_all.detach().cpu().numpy(),
+                    extr=extr, world_scale=world_scale,
+                    frame_names=frame_names_all, obj_ids_all=obj_ids_all_combined,
+                    frame_obj_ids_slots=frame_obj_ids_all, T=T_all, N=N_all,
+                    output_dir=out_dir, basename="ground_plane_info",
+                    device=torch.device("cpu"),
+                )
+                if _pkl:
+                    print(f"[INFO] Saved ground-plane info: {_pkl}")
+            except Exception as e:
+                print(f"[WARN] Ground-plane info extraction failed: {e}")
+        if ground_rows:
+            try:
+                plot_dir = run_plot_ground_info(
+                    rows=ground_rows, frame_names=frame_names_all,
+                    output_dir=out_dir, frame_interval=200,
+                    plot_subdir="ground_plane_plots",
+                )
+                print(f"[INFO] Saved ground-plane plots: {plot_dir}")
+            except Exception as e:
+                print(f"[WARN] Ground-plane plotting failed: {e}")
+
+        # Reprojection overlays
+        overlay_result = generate_reproj_overlays(
+            verts=verts_all, j3d=j3d_all, pred_cam_t=pred_cam_t_all,
+            faces_np=faces_np,
+            camera_intrinsics_json=args.camera_intrinsics_json,
+            camera_scale=float(args.camera_scale),
+            bbox_kps_pkl=None,
+            payload_meta=payload.get("meta", {}),
+            frame_names=frame_names_all, obj_ids_all=obj_ids_all_combined,
+            frame_obj_ids_slots=frame_obj_ids_all,
+            segment_id_mappings=segment_id_mappings,
+            out_dir=out_dir, T=T_all, N=N_all,
+        )
+
+        # Clean up extracted dirs
+        if overlay_result:
+            for d in dict.fromkeys(overlay_result):
+                if d:
+                    cleanup_extracted_dir(d)
+
+        del combined
 
     print(f"\n[INFO] Done. Results in: {out_dir}")
 
