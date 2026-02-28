@@ -237,9 +237,14 @@ def render_overlay_frame(
             cv2.putText(canvas, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
 
     # ---- 4. header text --------------------------------------------------- #
-    errs = [e["error_px"] for ed in frame_errors.values() for e in ed["keypoints"]]
-    mean_e = float(np.mean(errs)) if errs else 0.0
-    txt = f"Frame {frame_name}  |  mean reproj err = {mean_e:.1f} px"
+    errs = [e["error_px"] for ed in frame_errors.values() for e in ed.get("keypoints", [])]
+    ious = [ed["mask_mesh_iou"] for ed in frame_errors.values() if "mask_mesh_iou" in ed]
+    parts = [f"Frame {frame_name}"]
+    if errs:
+        parts.append(f"reproj err = {float(np.mean(errs)):.1f} px")
+    if ious:
+        parts.append(f"mask IoU = {float(np.mean(ious)):.2f}")
+    txt = "  |  ".join(parts)
     cv2.putText(canvas, txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (0, 0, 0), 3, cv2.LINE_AA)
     cv2.putText(canvas, txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
