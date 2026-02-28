@@ -397,8 +397,8 @@ def meshes_4d() -> None:
     parser.add_argument(
         "--sync",
         choices=["truncate", "pad", "none"],
-        default="truncate",
-        help="How to sync different sequence lengths for viewing (default: truncate)",
+        default="pad",
+        help="How to sync different sequence lengths for viewing (default: pad)",
     )
     parser.add_argument(
         "--camera",
@@ -460,6 +460,20 @@ def meshes_4d() -> None:
 
     if not vertices_by_id:
         raise ValueError("No valid sequences loaded.")
+
+    lengths = {k: v.shape[0] for k, v in vertices_by_id.items()}
+    if lengths:
+        min_t, max_t = min(lengths.values()), max(lengths.values())
+        if min_t != max_t:
+            print(f"\n[INFO] Frame counts differ: min={min_t}, max={max_t}")
+            print(f"[INFO] Syncing with mode '{args.sync}' "
+                  f"({'pad shorter to max' if args.sync == 'pad' else 'truncate all to min' if args.sync == 'truncate' else 'no sync'})")
+            for pid in sorted(lengths, key=_natural_sort_key):
+                t = lengths[pid]
+                tag = " (shortest)" if t == min_t else ""
+                print(f"       ID {pid}: {t} frames{tag}")
+        else:
+            print(f"\n[INFO] All {len(lengths)} person(s) have {min_t} frames")
 
     vertices_by_id = _sync_sequences(vertices_by_id, args.sync)
 
@@ -571,8 +585,8 @@ def meshes_4d_single_person() -> None:
     parser.add_argument(
         "--sync",
         choices=["truncate", "pad", "none"],
-        default="truncate",
-        help="How to sync different sequence lengths for viewing (default: truncate)",
+        default="pad",
+        help="How to sync different sequence lengths for viewing (default: pad)",
     )
     parser.add_argument(
         "--camera",
