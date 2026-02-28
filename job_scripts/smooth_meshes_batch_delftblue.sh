@@ -23,9 +23,13 @@
 # Usage (single folder, per-segment Stage 3):
 #   sbatch job_scripts/smooth_meshes_batch_delftblue.sh -segment 428
 #
+# Usage (single folder, simple centroid-based placement):
+#   sbatch job_scripts/smooth_meshes_batch_delftblue.sh -simple 428
+#
 # Usage (all folders with digit prefix):
 #   sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all 4
 #   sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all -segment 4
+#   sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all -simple 4
 #
 # Stage 3 mode:
 #   Default ("full"):   smooth_mhr_and_export_meshes.py — processes the entire
@@ -33,6 +37,8 @@
 #   -segment / --segment: smooth_mhr_per_segment.py — processes each video
 #                        segment independently, then concatenates meshes.
 #                        Use this when multi-segment data shows cross-segment jitter.
+#   -simple / --simple:  smooth_mhr_simple.py — no optimization; places meshes
+#                        using mask centroids + a fixed world-height assumption.
 #
 # Paths (host):
 #   Dataset root:   /scratch/zli33/data/conflab/bbox_kp/<NUM>
@@ -67,6 +73,7 @@ repo_dir=$home_path/projects/sam-body4d
 # ---------------------------------------------------------------------------
 ALL_MODE=0
 SEGMENT_MODE=0
+SIMPLE_MODE=0
 INPUT_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -77,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -segment|--segment)
       SEGMENT_MODE=1
+      shift
+      ;;
+    -simple|--simple)
+      SIMPLE_MODE=1
       shift
       ;;
     *)
@@ -92,12 +103,17 @@ if [ -z "${INPUT_ARG:-}" ]; then
   echo "[ERROR] A number (folder name or digit prefix) must be provided." >&2
   echo "  Usage: sbatch job_scripts/smooth_meshes_batch_delftblue.sh 428" >&2
   echo "         sbatch job_scripts/smooth_meshes_batch_delftblue.sh -segment 428" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_delftblue.sh -simple 428" >&2
   echo "         sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all 4" >&2
   echo "         sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all -segment 4" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_delftblue.sh -all -simple 4" >&2
   exit 2
 fi
 
-if [ "$SEGMENT_MODE" = "1" ]; then
+if [ "$SIMPLE_MODE" = "1" ]; then
+  STAGE3_SCRIPT="smooth_mhr_simple.py"
+  echo "[INFO] Stage 3 mode: SIMPLE (smooth_mhr_simple.py)"
+elif [ "$SEGMENT_MODE" = "1" ]; then
   STAGE3_SCRIPT="smooth_mhr_per_segment.py"
   echo "[INFO] Stage 3 mode: PER-SEGMENT (smooth_mhr_per_segment.py)"
 else
@@ -202,6 +218,21 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
 
   echo "[INFO] script=$STAGE3_SCRIPT"
 
+  # Build script-specific arguments
+  if [ "$SIMPLE_MODE" = "1" ]; then
+    EXTRA_ARGS=(
+      --camera-intrinsics-json "$intrinsic_path_container"
+      --extrinsics-json "$extrinsics_file_container"
+    )
+  else
+    EXTRA_ARGS=(
+      --config ${CONFIG_REL:-configs/body4d.yaml}
+      --camera-intrinsics-json "$intrinsic_path_container"
+      --extrinsics-json "$extrinsics_file_container"
+      --enable-ground
+    )
+  fi
+
   if apptainer exec --nv \
     --bind $model_path:$bind_model_path \
     --bind $data_path_conflab:$bind_data_path_conflab \
@@ -211,10 +242,7 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
     $sif_path \
     python $project_folder/$STAGE3_SCRIPT \
       --raw "$raw_path_container" \
-      --config ${CONFIG_REL:-configs/body4d.yaml} \
-      --camera-intrinsics-json "$intrinsic_path_container" \
-      --extrinsics-json "$extrinsics_file_container" \
-      --enable-ground ; then
+      "${EXTRA_ARGS[@]}" ; then
     echo "[INFO] [$idx/$total] folder=$FOLDER_NUM completed successfully."
   else
     echo "[ERROR] [$idx/$total] folder=$FOLDER_NUM FAILED (exit code $?)." >&2
