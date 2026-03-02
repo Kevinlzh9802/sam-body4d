@@ -84,9 +84,16 @@ def load_annotation_json(
     segment_key: str,
 ) -> List[Dict[str, Any]]:
     """Load annotation JSON for a segment.  Returns list of bbox dicts."""
-    path = os.path.join(annotation_folder, f"{segment_key}.json")
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Annotation file not found: {path}")
+    pattern = os.path.join(annotation_folder, f"{segment_key}*.json")
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"Annotation file not found for pattern: {pattern}")
+    path = matches[0]
+    if len(matches) > 1:
+        print(
+            f"[WARN] Multiple annotation files matched for '{segment_key}'. "
+            f"Using first sorted match: {path}"
+        )
 
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
