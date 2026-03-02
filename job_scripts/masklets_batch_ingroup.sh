@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu-a100
 #SBATCH --time=6:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=24
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END
@@ -34,12 +34,10 @@ home_path=/home/zli33
 scratch_path=/scratch/zli33
 
 model_path=$scratch_path/models/sam4d_checkpoints
-data_path_conflab=$scratch_path/data/conflab
 data_path_ingroup=$scratch_path/data/ingroup
 data_path_sam4d=$scratch_path/data/sam4d
 
 bind_model_path=/mnt/sam4d_checkpoints
-bind_data_path_conflab=/mnt/data/conflab
 bind_data_path_ingroup=/mnt/data/ingroup
 bind_data_path_sam4d=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
@@ -148,7 +146,7 @@ print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
 PY
 )
 
-snapshot_parent_host="$data_path_conflab/bbox_kp/_snapshots"
+snapshot_parent_host="$data_path_ingroup/bbox_kp/_snapshots"
 mkdir -p "$snapshot_parent_host"
 code_snapshot_host="$snapshot_parent_host/exp_${timestamp}_${rand_suffix}/code"
 mkdir -p "$code_snapshot_host"
@@ -161,7 +159,7 @@ if rsync -a --delete \
   --exclude "outputs" \
   "$repo_dir/" \
   "$code_snapshot_host/" ; then
-  project_folder="$bind_data_path_conflab/bbox_kp/_snapshots/exp_${timestamp}_${rand_suffix}/code"
+  project_folder="$bind_data_path_ingroup/bbox_kp/_snapshots/exp_${timestamp}_${rand_suffix}/code"
 else
   echo "[WARN] Failed to create code snapshot; running from live repo in home."
   project_folder="$bind_home_path/projects/sam-body4d"
@@ -183,7 +181,7 @@ for BATCH_NUM in "${batch_nums[@]}"; do
   echo "=================================================================="
 
   video_input_folder_container="$bind_data_path_ingroup/video_segs_10s/$seq_name"
-  output_container="$bind_data_path_conflab/bbox_kp/$seq_name"
+  output_container="$bind_data_path_ingroup/bbox_kp/$seq_name"
 
   video_input_folder_host="$data_path_ingroup/video_segs_10s/$seq_name"
   if [ ! -d "$video_input_folder_host" ]; then
@@ -213,7 +211,7 @@ for BATCH_NUM in "${batch_nums[@]}"; do
   fi
 
   annotation_folder_container="$bind_data_path_ingroup/video_frame_annotations/$(basename "$annotation_folder_host")"
-  mkdir -p "$data_path_conflab/bbox_kp/$seq_name"
+  mkdir -p "$data_path_ingroup/bbox_kp/$seq_name"
 
   echo "[INFO] input-folder=$video_input_folder_container"
   echo "[INFO] annotation-folder=$annotation_folder_container"
@@ -221,7 +219,6 @@ for BATCH_NUM in "${batch_nums[@]}"; do
 
   if apptainer exec --nv \
     --bind $model_path:$bind_model_path \
-    --bind $data_path_conflab:$bind_data_path_conflab \
     --bind $data_path_ingroup:$bind_data_path_ingroup \
     --bind $data_path_sam4d:$bind_data_path_sam4d \
     --bind $home_path:$bind_home_path \
