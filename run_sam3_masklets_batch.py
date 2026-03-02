@@ -183,6 +183,27 @@ def save_masklets(
     return img_to_video, num_frames_saved
 
 
+def save_empty_masks(
+    output_dir: str,
+    frame_number_offset: int,
+    num_frames: int,
+    width: int,
+    height: int,
+) -> int:
+    """Write empty black mask PNGs for a skipped segment."""
+    masks_dir = os.path.join(output_dir, "masks")
+    os.makedirs(masks_dir, exist_ok=True)
+
+    empty_mask = np.zeros((height, width), dtype=np.uint8)
+    for local_idx in range(num_frames):
+        global_idx = frame_number_offset + local_idx
+        msk_pil = Image.fromarray(empty_mask).convert("P")
+        msk_pil.putpalette(DAVIS_PALETTE)
+        msk_pil.save(os.path.join(masks_dir, f"{global_idx:08d}.png"))
+
+    return num_frames
+
+
 # ---------------------------------------------------------------------------
 # Segment processing
 # ---------------------------------------------------------------------------
@@ -420,7 +441,20 @@ def main():
         try:
             seg_bbox_entries = load_annotation_json(annotation_folder, segment_key)
         except FileNotFoundError as e:
-            print(f"[WARN] {e}. Skipping segment.")
+            print(f"[WARN] {e}. Skipping SAM propagation; writing empty masks for this segment.")
+            num_empty = save_empty_masks(
+                output_dir=output_dir,
+                frame_number_offset=cumulative_frame_offset,
+                num_frames=seg_total_frames,
+                width=seg_w,
+                height=seg_h,
+            )
+            segment_id_mappings.append({
+                "segment_key": segment_key,
+                "frame_start": cumulative_frame_offset,
+                "frame_end": cumulative_frame_offset + num_empty - 1,
+                "consecutive_to_actual": {},
+            })
             cumulative_frame_offset += seg_total_frames
             continue
         except (ValueError, json.JSONDecodeError) as e:
