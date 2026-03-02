@@ -8,8 +8,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END
 #SBATCH --account=research-eemcs-insy
-#SBATCH --output=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
-#SBATCH --error=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.err
+#SBATCH --output=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
+#SBATCH --error=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.err
 
 # Batch SAM-3 masklet extraction over all segments of a numbered video folder.
 #
