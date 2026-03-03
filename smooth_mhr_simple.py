@@ -52,6 +52,7 @@ from utils.extract_mesh_ground_info import run_extract_ground_info
 from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
+from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
 from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
 
 
@@ -417,6 +418,19 @@ def main() -> None:
             print(f"[INFO] Saved ground-plane plots: {plot_dir}")
         except Exception as e:
             print(f"[WARN] Ground-plane plotting failed: {e}")
+
+    # ---- Mesh height plot ---------------------------------------------------
+    try:
+        plot_mesh_heights_from_stage3(
+            vertices=verts, pred_cam_t=pred_cam_t, extr=extr,
+            world_scale=world_scale, T=T, N=N,
+            obj_ids_all=obj_ids_all,
+            frame_obj_ids_slots=frame_obj_ids_slots,
+            output_path=os.path.join(out_dir, "mesh_heights_world.png"),
+            title="Mesh Height (World Space) — simple centroid placement",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to generate mesh height plot: {e}")
 
     # ---- Feet z-coordinate plot -------------------------------------------
     try:

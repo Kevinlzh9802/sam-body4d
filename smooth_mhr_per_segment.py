@@ -59,6 +59,7 @@ from utils.extract_mesh_ground_info import run_extract_ground_info
 from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
+from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
 from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
@@ -581,6 +582,20 @@ def main() -> None:
         frame_obj_ids_all = combined["frame_obj_ids_slots"]
 
         world_scale = float(args.world_scale)
+
+        # Mesh height plot
+        if extr is not None:
+            try:
+                plot_mesh_heights_from_stage3(
+                    vertices=verts_all, pred_cam_t=pred_cam_t_all, extr=extr,
+                    world_scale=world_scale, T=T_all, N=N_all,
+                    obj_ids_all=obj_ids_all_combined,
+                    frame_obj_ids_slots=frame_obj_ids_all,
+                    output_path=os.path.join(out_dir, "mesh_heights_world.png"),
+                    title="Mesh Height (World Space) — Per-Segment Stage 3",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to generate mesh height plot: {e}")
 
         # Feet z-coordinate plot
         if extr is not None:
