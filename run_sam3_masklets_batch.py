@@ -226,6 +226,7 @@ def process_single_segment(
     seg_w: int,
     seg_h: int,
     offload_to_cpu: bool,
+    cam_res_scale: float,
 ) -> Tuple[List[np.ndarray], int, Dict[int, int]]:
     """Process one video segment: init state, add prompts, propagate, save.
 
@@ -249,6 +250,11 @@ def process_single_segment(
         y = float(bbox_entry.get("y", 0))
         w = float(bbox_entry.get("w", 0))
         h = float(bbox_entry.get("h", 0))
+        if cam_res_scale != 1.0:
+            x *= cam_res_scale
+            y *= cam_res_scale
+            w *= cam_res_scale
+            h *= cam_res_scale
         rel_box = bbox_xywh_to_rel([x, y, w, h], seg_w, seg_h)
         print(
             f"  Consecutive ID {consecutive_id} (actual PID {actual_pid}) "
@@ -393,6 +399,12 @@ def main():
                         help="Maximum number of frames to track per segment")
     parser.add_argument("--offload-to-cpu", action="store_true",
                         help="Offload video frames and state to CPU to reduce GPU memory (slower)")
+    parser.add_argument(
+        "--cam-res-scale",
+        type=float,
+        default=0.5,
+        help="Scale factor applied to annotation [x,y,w,h] before converting to relative coordinates",
+    )
     args = parser.parse_args()
 
     # Resolve config
@@ -400,6 +412,9 @@ def main():
     if not os.path.exists(cfg_path):
         cfg_path = os.path.join(os.path.dirname(__file__), args.config)
     cfg = OmegaConf.load(cfg_path)
+    if args.cam_res_scale <= 0:
+        raise ValueError(f"--cam-res-scale must be > 0, got {args.cam_res_scale}")
+    print(f"[INFO] Annotation coordinate scale (cam_res_scale): {args.cam_res_scale}")
 
     # Discover segments
     input_folder = args.input_folder
@@ -483,6 +498,7 @@ def main():
             frame_offset=cumulative_frame_offset,
             seg_w=seg_w, seg_h=seg_h,
             offload_to_cpu=args.offload_to_cpu,
+            cam_res_scale=float(args.cam_res_scale),
         )
         all_vis_frames.extend(vis_frames)
         all_actual_ids.update(seg_c2a.values())

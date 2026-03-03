@@ -20,10 +20,13 @@
 #                - list: 1,3,5
 #                - range: 3-5
 #                - mixed: 1,3-5
+# Optional args:
+#   -cam_res_scale <float>   scale annotation [x,y,w,h] to video resolution (default: 0.5)
 #
 # Example:
 #   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1
 #   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1,3-5
+#   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1,3-5 -cam_res_scale 0.5
 #
 # Constructed sequence format:
 #   cam%02d_batch%02d (e.g., cam02_batch01)
@@ -47,6 +50,7 @@ repo_dir=$home_path/projects/sam-body4d
 
 CAM_NUM=""
 BATCH_SPEC=""
+CAM_RES_SCALE="0.5"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,13 +62,17 @@ while [[ $# -gt 0 ]]; do
       BATCH_SPEC="${2:-}"
       shift 2
       ;;
+    -cam_res_scale|--cam_res_scale|--cam-res-scale)
+      CAM_RES_SCALE="${2:-}"
+      shift 2
+      ;;
     -h|--help)
-      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec>"
+      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]"
       exit 0
       ;;
     *)
       echo "[ERROR] Unknown argument: $1" >&2
-      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec>" >&2
+      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
       exit 2
       ;;
   esac
@@ -72,12 +80,17 @@ done
 
 if [[ -z "$CAM_NUM" || -z "$BATCH_SPEC" ]]; then
   echo "[ERROR] Both -cam and -b are required." >&2
-  echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec>" >&2
+  echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
   exit 2
 fi
 
 if ! [[ "$CAM_NUM" =~ ^[0-9]+$ ]]; then
   echo "[ERROR] -cam must be a non-negative integer, got: $CAM_NUM" >&2
+  exit 2
+fi
+
+if ! [[ "$CAM_RES_SCALE" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+  echo "[ERROR] -cam_res_scale must be a positive number, got: $CAM_RES_SCALE" >&2
   exit 2
 fi
 
@@ -138,6 +151,7 @@ if [ ${#batch_nums[@]} -eq 0 ]; then
 fi
 
 echo "[INFO] Parsed batches: ${batch_nums[*]}"
+echo "[INFO] cam_res_scale: $CAM_RES_SCALE"
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 rand_suffix=$(python3 - <<'PY'
@@ -229,6 +243,7 @@ for BATCH_NUM in "${batch_nums[@]}"; do
       --input-folder "$video_input_folder_container" \
       --annotation-folder "$annotation_folder_container" \
       --config configs/body4d.yaml \
+      --cam-res-scale "$CAM_RES_SCALE" \
       --output "$output_container" ; then
     echo "[INFO] [$idx/$total] Completed sequence: $seq_name"
   else
