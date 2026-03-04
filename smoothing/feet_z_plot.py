@@ -18,8 +18,11 @@ except ImportError:
     # Allow running as standalone script
     from ground_plane_opt import Extrinsics, FOOT_IDXS
 
-PELVIS_IDX = 0
-HEAD_IDX = 15  # head top in SMPL / MHR70
+# MHR70 keypoint indices (NOT SMPL ordering — see metadata/mhr70.py)
+NOSE_IDX = 0
+HIP_IDXS = (9, 10)        # left_hip, right_hip (proxy for pelvis)
+NECK_IDX = 69
+# FOOT_IDXS = (13..20) already defined in ground_plane_opt
 
 
 def compute_feet_z_world(
@@ -217,11 +220,12 @@ def plot_body_landmarks_z(
     output_path: str,
     title: Optional[str] = None,
 ) -> None:
-    """Plot pelvis, head, and feet world-z on a single 3-subplot figure."""
+    """Plot nose, hips, neck, and feet world-z on a single multi-subplot figure."""
     groups = {
-        "Head (joint 15)": [HEAD_IDX],
-        "Pelvis (joint 0)": [PELVIS_IDX],
-        "Feet (ankles/toes/heels)": list(FOOT_IDXS),
+        "Nose (joint 0)": [NOSE_IDX],
+        "Neck (joint 69)": [NECK_IDX],
+        "Hips — pelvis proxy (joints 9,10)": list(HIP_IDXS),
+        "Feet — ankles/toes/heels (joints 13-20)": list(FOOT_IDXS),
     }
     data_per_group: Dict[str, Dict[int, Tuple[np.ndarray, np.ndarray]]] = {}
     for label, idxs in groups.items():

@@ -114,14 +114,17 @@ def compute_pred_cam_t_from_centroids(
     frame_obj_ids_slots: List[List[int]],
     T: int,
     N: int,
-    pelvis_idx: int = 0,
+    hip_indices: Tuple[int, int] = (9, 10),
 ) -> torch.Tensor:
     """
     For each (person, frame) compute ``pred_cam_t`` such that:
-    - the pelvis projects to the mask centroid in the image, and
-    - the pelvis world z-coordinate equals ``assumed_height_world``.
+    - the hip midpoint projects to the mask centroid in the image, and
+    - the hip midpoint world z-coordinate equals ``assumed_height_world``.
 
-    Falls back to the raw ``pred_cam_t`` (from MHR) when no centroid is available.
+    MHR70 has no explicit pelvis joint; we use the midpoint of left_hip (9)
+    and right_hip (10) as a proxy.
+
+    Falls back to zero ``pred_cam_t`` when no centroid is available.
     """
     device = j3d_local.device
     pred_cam_t = torch.zeros(T * N, 3, device=device)
@@ -129,11 +132,8 @@ def compute_pred_cam_t_from_centroids(
     fx, fy = float(K[0, 0]), float(K[1, 1])
     cx_k, cy_k = float(K[0, 2]), float(K[1, 2])
 
-    # World-transform helpers (row-vector convention):
-    #   X_world = (X_cam * world_scale - t) @ R^T
     Rt = extr.R.transpose(0, 1).cpu().numpy()          # (3,3) = R^T
     t_extr = extr.t.cpu().numpy().reshape(3)            # (3,)
-    # 3rd column of R^T — used to pick the world z component
     Rt_col2 = Rt[:, 2]                                  # (3,)
 
     n_placed = 0
@@ -146,7 +146,8 @@ def compute_pred_cam_t_from_centroids(
             if ti not in oid_centroids:
                 continue
             cx_px, cy_px = oid_centroids[ti]
-            pelvis_local = j3d_local[bi, pelvis_idx].cpu().numpy()  # (3,)
+            # Hip midpoint as pelvis proxy (MHR70 joints 9=left_hip, 10=right_hip)
+            pelvis_local = j3d_local[bi, list(hip_indices)].cpu().numpy().mean(axis=0)  # (3,)
 
             # Unnormalised camera ray (z=1)
             r = np.array([(cx_px - cx_k) / fx, (cy_px - cy_k) / fy, 1.0], dtype=np.float64)
