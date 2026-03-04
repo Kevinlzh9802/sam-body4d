@@ -41,7 +41,7 @@ from smoothing.stage3_core import (
     run_stage3_post_optimizations,
 )
 from smoothing.ground_plane_opt import load_extrinsics_json, GroundOptConfig
-from smoothing.feet_z_plot import plot_feet_z_from_stage3
+from smoothing.feet_z_plot import plot_feet_z_from_stage3, plot_body_landmarks_z
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
@@ -530,6 +530,20 @@ def main() -> None:
             )
         except Exception as e:
             print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
+
+    # Head / pelvis / feet z-coordinate combined plot
+    if extr is not None:
+        try:
+            plot_body_landmarks_z(
+                keypoints3d_local=j3d, pred_cam_t=pred_cam_t, extr=extr,
+                T=T, N=N, obj_ids_all=obj_ids_all,
+                frame_obj_ids_slots=frame_obj_ids_slots,
+                world_scale=world_scale,
+                output_path=os.path.join(out_dir, "body_landmarks_z_world.png"),
+                title="Body Landmark Z (World) — Post Stage 3",
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to generate body landmark z-plot: {e}")
 
     # Reprojection overlays
     overlay_result = generate_reproj_overlays(

@@ -18,6 +18,9 @@ except ImportError:
     # Allow running as standalone script
     from ground_plane_opt import Extrinsics, FOOT_IDXS
 
+PELVIS_IDX = 0
+HEAD_IDX = 15  # head top in SMPL / MHR70
+
 
 def compute_feet_z_world(
     *,
@@ -168,6 +171,93 @@ def plot_feet_z_from_stage3(
         output_path=output_path,
         title=title or "Average Feet Z-Coordinate (World Space)",
     )
+
+
+def _compute_landmark_z_world(
+    *,
+    keypoints3d_local: torch.Tensor,
+    pred_cam_t: torch.Tensor,
+    extr: Extrinsics,
+    T: int,
+    N: int,
+    obj_ids_all: List[int],
+    frame_obj_ids_slots: List[List[int]],
+    world_scale: float,
+    joint_indices: List[int],
+) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+    """Compute mean world-z of *joint_indices* per person per frame."""
+    device = keypoints3d_local.device
+    K = keypoints3d_local.shape[1]
+    idxs = [i for i in joint_indices if i < K]
+    if not idxs:
+        return {}
+    results: Dict[int, Tuple[List[int], List[float]]] = {oid: ([], []) for oid in obj_ids_all}
+    for ti in range(T):
+        for si, oid in enumerate(obj_ids_all):
+            if frame_obj_ids_slots[ti][si] != oid:
+                continue
+            bi = ti * N + si
+            pts = keypoints3d_local[bi, idxs, :] + pred_cam_t[bi].view(1, 3)
+            pts_world = extr.cam_to_world(pts * world_scale)
+            results[oid][0].append(ti)
+            results[oid][1].append(float(pts_world[:, 2].mean().item()))
+    return {oid: (np.array(f), np.array(z)) for oid, (f, z) in results.items() if f}
+
+
+def plot_body_landmarks_z(
+    *,
+    keypoints3d_local: torch.Tensor,
+    pred_cam_t: torch.Tensor,
+    extr: Extrinsics,
+    T: int,
+    N: int,
+    obj_ids_all: List[int],
+    frame_obj_ids_slots: List[List[int]],
+    world_scale: float = 100.0,
+    output_path: str,
+    title: Optional[str] = None,
+) -> None:
+    """Plot pelvis, head, and feet world-z on a single 3-subplot figure."""
+    groups = {
+        "Head (joint 15)": [HEAD_IDX],
+        "Pelvis (joint 0)": [PELVIS_IDX],
+        "Feet (ankles/toes/heels)": list(FOOT_IDXS),
+    }
+    data_per_group: Dict[str, Dict[int, Tuple[np.ndarray, np.ndarray]]] = {}
+    for label, idxs in groups.items():
+        data_per_group[label] = _compute_landmark_z_world(
+            keypoints3d_local=keypoints3d_local, pred_cam_t=pred_cam_t,
+            extr=extr, T=T, N=N, obj_ids_all=obj_ids_all,
+            frame_obj_ids_slots=frame_obj_ids_slots,
+            world_scale=world_scale, joint_indices=idxs,
+        )
+
+    n_groups = len(groups)
+    fig, axes = plt.subplots(n_groups, 1, figsize=(14, 4 * n_groups), sharex=True)
+    if n_groups == 1:
+        axes = [axes]
+    cmap = plt.cm.get_cmap("tab20")
+    n_persons = max(len(obj_ids_all), 1)
+    wu = "cm" if abs(world_scale - 100.0) < 1 else "world units"
+
+    for ax, (label, person_data) in zip(axes, data_per_group.items()):
+        for idx, (oid, (frames, zvals)) in enumerate(sorted(person_data.items())):
+            color = cmap(idx / n_persons)
+            ax.plot(frames, zvals, color=color, alpha=0.8, linewidth=1,
+                    label=f"ID {oid} (mean {zvals.mean():.1f})")
+        ax.axhline(y=0, color="red", linestyle="--", linewidth=1.5, label="Ground (z=0)")
+        ax.set_ylabel(f"z ({wu})")
+        ax.set_title(label)
+        ax.legend(loc="upper right", fontsize="small", ncol=2)
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel("Frame")
+    fig.suptitle(title or "Body Landmark Z-Coordinates (World Space)", fontsize=13)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] Body landmark z-plot saved to: {output_path}")
 
 
 # ---------------------------------------------------------------------------

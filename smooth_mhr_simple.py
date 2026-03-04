@@ -45,7 +45,7 @@ if sam3d_body_pkg_dir not in sys.path:
 from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import load_raw_mhr
 from smoothing.stage3_core import stack_frames_to_tensors, freeze_shape_scale_first_frame
 from smoothing.ground_plane_opt import load_extrinsics_json, Extrinsics
-from smoothing.feet_z_plot import plot_feet_z_from_stage3
+from smoothing.feet_z_plot import plot_feet_z_from_stage3, plot_body_landmarks_z
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.extract_mesh_ground_info import run_extract_ground_info
@@ -444,6 +444,19 @@ def main() -> None:
         )
     except Exception as e:
         print(f"[WARN] Feet z-coordinate plot failed: {e}")
+
+    # ---- Head / pelvis / feet z-coordinate combined plot ------------------
+    try:
+        plot_body_landmarks_z(
+            keypoints3d_local=j3d, pred_cam_t=pred_cam_t.to(device), extr=extr_device,
+            T=T, N=N, obj_ids_all=obj_ids_all,
+            frame_obj_ids_slots=frame_obj_ids_slots,
+            world_scale=world_scale,
+            output_path=os.path.join(out_dir, "body_landmarks_z_world.png"),
+            title="Body Landmark Z (World) — simple centroid placement",
+        )
+    except Exception as e:
+        print(f"[WARN] Body landmark z-plot failed: {e}")
 
     # ---- Reprojection overlays --------------------------------------------
     overlay_result = generate_reproj_overlays(

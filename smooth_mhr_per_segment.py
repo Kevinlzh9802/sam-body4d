@@ -50,7 +50,7 @@ from smoothing.stage3_core import (
     run_stage3_post_optimizations,
 )
 from smoothing.ground_plane_opt import load_extrinsics_json, GroundOptConfig
-from smoothing.feet_z_plot import plot_feet_z_from_stage3
+from smoothing.feet_z_plot import plot_feet_z_from_stage3, plot_body_landmarks_z
 from smoothing.reproj_opt import ReprojOptConfig
 from smoothing.mask_reproj_opt import MaskReprojOptConfig
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_global_rot_per_obj_id_adaptive
@@ -610,6 +610,20 @@ def main() -> None:
                 )
             except Exception as e:
                 print(f"[WARN] Failed to generate feet z-coordinate plot: {e}")
+
+        # Head / pelvis / feet z-coordinate combined plot
+        if extr is not None:
+            try:
+                plot_body_landmarks_z(
+                    keypoints3d_local=j3d_all, pred_cam_t=pred_cam_t_all, extr=extr,
+                    T=T_all, N=N_all, obj_ids_all=obj_ids_all_combined,
+                    frame_obj_ids_slots=frame_obj_ids_all,
+                    world_scale=world_scale,
+                    output_path=os.path.join(out_dir, "body_landmarks_z_world.png"),
+                    title="Body Landmark Z (World) — Per-Segment Stage 3",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to generate body landmark z-plot: {e}")
 
         # Ground-plane info + plots
         ground_rows: List[Dict[str, Any]] = []
