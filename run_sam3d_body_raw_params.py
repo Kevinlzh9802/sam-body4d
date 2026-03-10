@@ -37,6 +37,9 @@ from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import save_raw_mhr
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 from utils.id_mapping import load_segment_id_mappings, to_actual_pid, find_segment_for_frame
+from utils.merge_raw_mhr import (
+    merge_raw_mhr_parts, all_parts_ready, discover_part_files, NUM_EXPECTED_PARTS,
+)
 from utils.model_factory import build_sam3d_body_from_config
 from utils.zip_utils import unzip_if_needed, zip_and_remove_dir
 
@@ -228,11 +231,35 @@ def save_per_segment_raw_mhr(
 
 
 # ---------------------------------------------------------------------------
+# Post-merge diagnostics (called after merge completes)
+# ---------------------------------------------------------------------------
+
+def _run_post_merge(input_dir: str, all_frames: List[Dict[str, Any]], meta: Dict[str, Any]) -> None:
+    """Generate summary / per-segment debug files after a merge."""
+    segment_id_mappings = meta.get("segment_id_mappings") or load_segment_id_mappings(input_dir)
+    save_mesh_prediction_summary(
+        all_frames, segment_id_mappings,
+        os.path.join(input_dir, "mesh_prediction_summary.json"),
+    )
+    if segment_id_mappings:
+        save_per_segment_raw_mhr(
+            all_frames, segment_id_mappings, input_dir,
+            meta.get("config_path", ""),
+            meta.get("camera_intrinsics", ""),
+            float(meta.get("camera_scale", 0.5)),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage 2: dump raw MHR params from masks/images")
+    parser = argparse.ArgumentParser(
+        description="Stage 2: dump raw MHR params from masks/images.  "
+                    "Supports splitting into parts (--frame-start/--frame-end) "
+                    "and merging (--merge).",
+    )
     parser.add_argument("--input", required=True, help="Stage1 output dir (contains images/, masks/)")
     parser.add_argument("--intrinsic-path", default=None,
                         help="Path to camera intrinsics JSON. If unset, derived from input path.")
@@ -240,7 +267,28 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference call")
     parser.add_argument("--out", default=None, help="Output .pt path (default: <input>/raw_mhr.pt)")
     parser.add_argument("--camera-scale", type=float, default=0.5)
+
+    # Partial-run arguments
+    parser.add_argument("--frame-start", type=int, default=None,
+                        help="First frame index to process (inclusive). 0-based index into the sorted file list.")
+    parser.add_argument("--frame-end", type=int, default=None,
+                        help="Last frame index to process (exclusive). E.g. --frame-start 0 --frame-end 2400 processes frames [0,2400).")
+    parser.add_argument("--part-label", default=None,
+                        help="Label for this part (default: auto from frame range). "
+                             "Output goes to <input>/raw_mhr_parts/raw_mhr_part_<label>.pt")
+    # Merge mode
+    parser.add_argument("--merge", action="store_true",
+                        help="Merge all raw_mhr_part_*.pt in <input>/raw_mhr_parts/ into raw_mhr.pt and exit.")
+
     args = parser.parse_args()
+
+    # ---- Merge mode: no GPU needed ----
+    if args.merge:
+        _, all_frames, meta = merge_raw_mhr_parts(args.input, out_path=args.out)
+        _run_post_merge(args.input, all_frames, meta)
+        return
+
+    is_partial = args.frame_start is not None or args.frame_end is not None
 
     t0 = time.time()
     input_dir = args.input
@@ -284,30 +332,46 @@ def main() -> None:
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
     masks_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(masks_dir, ext))])
-    n = min(len(images_list), len(masks_list))
-    images_list, masks_list = images_list[:n], masks_list[:n]
-    if n == 0:
+    n_total = min(len(images_list), len(masks_list))
+    images_list, masks_list = images_list[:n_total], masks_list[:n_total]
+    if n_total == 0:
         raise FileNotFoundError("Found no images or masks to process.")
+
+    # Slice for partial runs
+    fs_idx = args.frame_start if args.frame_start is not None else 0
+    fe_idx = args.frame_end if args.frame_end is not None else n_total
+    fs_idx = max(0, min(fs_idx, n_total))
+    fe_idx = max(fs_idx, min(fe_idx, n_total))
+
+    if is_partial:
+        print(f"[INFO] Partial run: processing frames [{fs_idx}, {fe_idx}) out of {n_total} total")
+        images_list = images_list[fs_idx:fe_idx]
+        masks_list = masks_list[fs_idx:fe_idx]
+
+    n = len(images_list)
+    if n == 0:
+        raise FileNotFoundError("Frame range is empty — nothing to process.")
 
     # Scan for corrupted frames
     corrupted_set, valid_indices, valid_images, valid_masks, n_valid = scan_corrupted_frames(
         images_list, masks_list, n,
     )
 
-    # Optional: mask centroids sanity check
-    try:
-        from utils.plot_mask_centroids import compute_mask_centroids, plot_mask_centroids
+    # Optional: mask centroids sanity check (skip for partial runs)
+    if not is_partial:
+        try:
+            from utils.plot_mask_centroids import compute_mask_centroids, plot_mask_centroids
 
-        def _to_actual(cid, fidx):
-            return to_actual_pid(cid, fidx, segment_id_mappings)
+            def _to_actual(cid, fidx):
+                return to_actual_pid(cid, fidx, segment_id_mappings)
 
-        centroid_data = compute_mask_centroids(masks_list, _to_actual)
-        plot_mask_centroids(
-            centroid_data, os.path.join(input_dir, "mask_centroids.png"),
-            title_prefix="Stage 1 Mask Centroids (real IDs)",
-        )
-    except Exception as e:
-        print(f"[WARN] Failed to plot mask centroids: {e}")
+            centroid_data = compute_mask_centroids(masks_list, _to_actual)
+            plot_mask_centroids(
+                centroid_data, os.path.join(input_dir, "mask_centroids.png"),
+                title_prefix="Stage 1 Mask Centroids (real IDs)",
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to plot mask centroids: {e}")
 
     # Batch inference
     idx_path, idx_dict, mhr_shape_scale_dict, occ_dict = {}, {}, {}, {}
@@ -438,48 +502,81 @@ def main() -> None:
         print(f"[DEBUG] EXTRA IDs (in output but not masks): {sorted(extra_ids)}")
     print(f"[DEBUG] ==============================\n")
 
-    # Save mesh prediction summary
-    save_mesh_prediction_summary(
-        frames, segment_id_mappings,
-        os.path.join(input_dir, "mesh_prediction_summary.json"),
-    )
+    if is_partial:
+        # ---- Partial run: save part file only ----
+        part_label = args.part_label or f"{fs_idx}_{fe_idx}"
+        parts_dir = os.path.join(input_dir, "raw_mhr_parts")
+        os.makedirs(parts_dir, exist_ok=True)
+        part_path = args.out or os.path.join(parts_dir, f"raw_mhr_part_{part_label}.pt")
+        payload = {
+            "frames": frames,
+            "meta": {
+                "input_dir": input_dir,
+                "config_path": cfg_path,
+                "camera_intrinsics": camera_intrinsics_path,
+                "camera_scale": float(args.camera_scale),
+                "note": f"Partial raw params (frames [{fs_idx}, {fe_idx})) with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
+                "segment_id_mappings": segment_id_mappings,
+                "num_corrupted_interpolated": num_interpolated,
+                "frame_start": fs_idx,
+                "frame_end": fe_idx,
+                "part_label": part_label,
+            },
+        }
+        save_raw_mhr(part_path, payload)
+        print(f"[INFO] Saved partial raw params to: {part_path}")
 
-    # Save per-segment raw_mhr files
-    if segment_id_mappings:
-        save_per_segment_raw_mhr(
-            frames, segment_id_mappings, input_dir,
-            cfg_path, camera_intrinsics_path, float(args.camera_scale),
+        # Auto-merge when all expected parts are present
+        if all_parts_ready(input_dir):
+            print(f"\n[INFO] All {NUM_EXPECTED_PARTS} parts detected — auto-merging into raw_mhr.pt")
+            _, merged_frames, merged_meta = merge_raw_mhr_parts(input_dir)
+            _run_post_merge(input_dir, merged_frames, merged_meta)
+        else:
+            n_found = len(discover_part_files(input_dir))
+            print(f"[INFO] {n_found}/{NUM_EXPECTED_PARTS} parts ready. "
+                  f"Remaining parts will trigger auto-merge, or run with --merge manually.")
+    else:
+        # ---- Full run: save everything ----
+        save_mesh_prediction_summary(
+            frames, segment_id_mappings,
+            os.path.join(input_dir, "mesh_prediction_summary.json"),
         )
+        if segment_id_mappings:
+            save_per_segment_raw_mhr(
+                frames, segment_id_mappings, input_dir,
+                cfg_path, camera_intrinsics_path, float(args.camera_scale),
+            )
 
-    # Save combined raw_mhr.pt
-    out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
-    payload = {
-        "frames": frames,
-        "meta": {
-            "input_dir": input_dir,
-            "config_path": cfg_path,
-            "camera_intrinsics": camera_intrinsics_path,
-            "camera_scale": float(args.camera_scale),
-            "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
-            "segment_id_mappings": segment_id_mappings,
-            "num_corrupted_interpolated": num_interpolated,
-        },
-    }
-    save_raw_mhr(out_path, payload)
-    print(f"[INFO] Saved combined raw params to: {out_path}")
+        out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
+        payload = {
+            "frames": frames,
+            "meta": {
+                "input_dir": input_dir,
+                "config_path": cfg_path,
+                "camera_intrinsics": camera_intrinsics_path,
+                "camera_scale": float(args.camera_scale),
+                "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
+                "segment_id_mappings": segment_id_mappings,
+                "num_corrupted_interpolated": num_interpolated,
+            },
+        }
+        save_raw_mhr(out_path, payload)
+        print(f"[INFO] Saved combined raw params to: {out_path}")
 
     mem = cuda_mem_snapshot()
     mem["wall_time_sec"] = float(time.time() - t0)
-    write_json(os.path.join(input_dir, "gpu_mem_stage2.json"), mem)
+    mem_label = f"gpu_mem_stage2{'_part_' + (args.part_label or f'{fs_idx}_{fe_idx}') if is_partial else ''}.json"
+    write_json(os.path.join(input_dir, mem_label), mem)
     print(f"[INFO] Peak GPU memory (stage2): {mem}")
 
-    # Re-zip
-    for d in (image_dir, masks_dir):
-        if os.path.isdir(d):
-            try:
-                zip_and_remove_dir(d)
-            except Exception as e:
-                print(f"[WARN] Failed to zip {d}: {e}")
+    # Re-zip only for full runs (partial runs leave dirs for other parts)
+    if not is_partial:
+        for d in (image_dir, masks_dir):
+            if os.path.isdir(d):
+                try:
+                    zip_and_remove_dir(d)
+                except Exception as e:
+                    print(f"[WARN] Failed to zip {d}: {e}")
 
 
 if __name__ == "__main__":
