@@ -250,6 +250,17 @@ def _run_post_merge(input_dir: str, all_frames: List[Dict[str, Any]], meta: Dict
         )
 
 
+def _rezip_input_dirs(input_dir: str) -> None:
+    """Ensure extracted images/ and masks/ are collapsed back into zip archives."""
+    for dirname in ("images", "masks"):
+        dir_path = os.path.join(input_dir, dirname)
+        if os.path.isdir(dir_path):
+            try:
+                zip_and_remove_dir(dir_path)
+            except Exception as e:
+                print(f"[WARN] Failed to zip {dir_path}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -286,6 +297,7 @@ def main() -> None:
     if args.merge:
         _, all_frames, meta = merge_raw_mhr_parts(args.input, out_path=args.out)
         _run_post_merge(args.input, all_frames, meta)
+        _rezip_input_dirs(args.input)
         return
 
     is_partial = args.frame_start is not None or args.frame_end is not None
@@ -531,6 +543,7 @@ def main() -> None:
             print(f"\n[INFO] All {NUM_EXPECTED_PARTS} parts detected — auto-merging into raw_mhr.pt")
             _, merged_frames, merged_meta = merge_raw_mhr_parts(input_dir)
             _run_post_merge(input_dir, merged_frames, merged_meta)
+            _rezip_input_dirs(input_dir)
         else:
             n_found = len(discover_part_files(input_dir))
             print(f"[INFO] {n_found}/{NUM_EXPECTED_PARTS} parts ready. "
@@ -562,22 +575,13 @@ def main() -> None:
         }
         save_raw_mhr(out_path, payload)
         print(f"[INFO] Saved combined raw params to: {out_path}")
+        _rezip_input_dirs(input_dir)
 
     mem = cuda_mem_snapshot()
     mem["wall_time_sec"] = float(time.time() - t0)
     mem_label = f"gpu_mem_stage2{'_part_' + (args.part_label or f'{fs_idx}_{fe_idx}') if is_partial else ''}.json"
     write_json(os.path.join(input_dir, mem_label), mem)
     print(f"[INFO] Peak GPU memory (stage2): {mem}")
-
-    # Re-zip only for full runs (partial runs leave dirs for other parts)
-    if not is_partial:
-        for d in (image_dir, masks_dir):
-            if os.path.isdir(d):
-                try:
-                    zip_and_remove_dir(d)
-                except Exception as e:
-                    print(f"[WARN] Failed to zip {d}: {e}")
-
 
 if __name__ == "__main__":
     main()
