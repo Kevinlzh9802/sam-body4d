@@ -208,7 +208,7 @@ def camera_ray_from_pixel(
     K64 = np.asarray(K, dtype=np.float64)
     if model == "fisheye":
         if dist.size < 4:
-            raise ValueError("--centroid-ray-model 'fisheye' requires at least 4 distortion coefficients.")
+            dist = np.pad(dist, (0, 4 - dist.size), mode="constant")
         undist = cv2.fisheye.undistortPoints(pixel, K64, dist[:4].reshape(4, 1))
     elif model == "standard":
         undist = cv2.undistortPoints(pixel, K64, dist)

@@ -2,8 +2,8 @@
 Canonical camera intrinsics utilities.
 
 Consolidates ``adjust_K``, ``read_camera_intrinsics`` (old JSON format),
-and ``read_camera_intrinsics_new`` (Calibration JSON) so every stage imports
-from one place.
+and ``read_camera_intrinsics_new`` (Calibration JSON plus compatible old
+JSON fallback) so every stage imports from one place.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def adjust_K(K: np.ndarray, scale: float) -> np.ndarray:
 
 
 def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Load intrinsics from old-format JSON (``{"intrinsic": [...], "distortion_coefficients": [...]}``).
+    """Load old-format JSON with ``intrinsic`` and ``distortion_coefficients``.
 
     Returns ``(K_scaled, dist_coeffs)``.
     """
@@ -39,12 +39,25 @@ def read_camera_intrinsics(intrinsic_file: str, scale: float) -> Tuple[np.ndarra
 
 
 def read_camera_intrinsics_new(intrinsic_file: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Load intrinsics from new Calibration JSON (``Calibration.cameras[0]``).
+    """Load intrinsics from either supported camera JSON schema.
 
-    Returns ``(K, dist_coeffs)`` — K is **not** pre-scaled.
+    Supported schemas:
+    - new Calibration JSON: ``Calibration.cameras[0].model...parameters``
+    - simple JSON: ``{"intrinsic": [[...]], "distortion_coefficients": [...]}``
+
+    Returns ``(K, dist_coeffs)``. K is not pre-scaled.
     """
     with open(intrinsic_file, "r", encoding="utf-8") as fh:
         intrinsic_data = json.load(fh)
+
+    if "intrinsic" in intrinsic_data:
+        K = np.asarray(intrinsic_data["intrinsic"], dtype=np.float64).reshape(3, 3)
+        dist_coeffs = np.asarray(
+            intrinsic_data.get("distortion_coefficients", []),
+            dtype=np.float64,
+        ).reshape(-1)
+        return K, dist_coeffs
+
     params = intrinsic_data["Calibration"]["cameras"][0]["model"]["ptr_wrapper"]["data"]["parameters"]
 
     f = params["f"]["val"]

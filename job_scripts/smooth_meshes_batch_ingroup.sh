@@ -46,7 +46,7 @@
 # Paths (host):
 #   Dataset root:   /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
 #   Intrinsics:      /scratch/zli33/data/ingroup/intrinsics/parameters-camera-{MM}.json
-#   Extrinsics:      /scratch/zli33/data/ingroup/extrinsics/extrinsic_cam_{MM}.json (if available)
+#   Extrinsics:      /scratch/zli33/data/ingroup/extrinsics/extrinsic_cam_{MM}.json (metres, if available)
 
 set -euo pipefail
 
@@ -63,6 +63,7 @@ bind_home_path=/mnt/home/zli33
 # Intrinsics and extrinsics are camera-specific (derived from folder name)
 extrinsics_dir_host="$data_path/extrinsics"
 extrinsics_dir_container="$bind_data_path/extrinsics"
+ingroup_world_scale=1.0
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
 repo_dir=$home_path/projects/sam-body4d
@@ -243,6 +244,7 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
     EXTRA_ARGS=(
       --camera-intrinsics-json "$intrinsic_path_container"
       --centroid-ray-model fisheye
+      --world-scale "$ingroup_world_scale"
     )
     if [ "$EXTRINSICS_AVAILABLE" = "1" ]; then
       EXTRA_ARGS+=(--extrinsics-json "$extrinsics_file_container")
@@ -252,6 +254,9 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
       --config ${CONFIG_REL:-configs/body4d.yaml}
       --camera-intrinsics-json "$intrinsic_path_container"
       --enable-ground
+      --world-scale "$ingroup_world_scale"
+      --contact-z-thresh 0.03
+      --contact-vxy-thresh 0.05
     )
     if [ "$EXTRINSICS_AVAILABLE" = "1" ]; then
       EXTRA_ARGS+=(--extrinsics-json "$extrinsics_file_container")

@@ -76,11 +76,31 @@ def load_extrinsics_json(path: str, device: torch.device) -> Extrinsics:
         R_np = _rodrigues_to_matrix(np.asarray(rvec_data, dtype=np.float32))
 
     t_data = _find_key(data, ("translation", "t", "tvec", "tvec_wc", "translation_vector"))
-    if t_data is None:
+    camera_center_data = _find_key(data, ("camera_center_world_m", "camera_center_world"))
+    if t_data is None and camera_center_data is not None:
+        camera_center = np.asarray(camera_center_data, dtype=np.float32).reshape(3)
+        t_np = -(R_np @ camera_center)
+    elif t_data is None:
         raise KeyError(
-            f"Extrinsics JSON {path!r} must contain 'translation', 't', or 'tvec'."
+            f"Extrinsics JSON {path!r} must contain 'translation', 't', 'tvec', "
+            "or 'camera_center_world_m'."
         )
-    t_np = np.asarray(t_data, dtype=np.float32).reshape(3)
+    else:
+        t_np = np.asarray(t_data, dtype=np.float32).reshape(3)
+
+    extrinsic_type = str(data.get("extrinsic_type", "world_to_camera")).lower()
+    if extrinsic_type in {"world_to_camera", "world2camera", "w2c", "opencv"}:
+        pass
+    elif extrinsic_type in {"camera_to_world", "camera2world", "c2w"}:
+        R_cw = R_np
+        t_cw = t_np
+        R_np = R_cw.T
+        t_np = -(R_np @ t_cw)
+    else:
+        raise ValueError(
+            f"Unsupported extrinsic_type={extrinsic_type!r} in {path!r}. "
+            "Expected 'world_to_camera' or 'camera_to_world'."
+        )
 
     R = torch.tensor(R_np, dtype=torch.float32, device=device)
     t = torch.tensor(t_np, dtype=torch.float32, device=device)
