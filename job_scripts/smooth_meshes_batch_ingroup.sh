@@ -45,8 +45,8 @@
 #
 # Paths (host):
 #   Dataset root:   /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
-#   Intrinsics:      /scratch/zli33/data/ingroup/intrinsics/parameters-camera-{MM}.json
-#   Extrinsics:      /scratch/zli33/data/ingroup/extrinsics/extrinsic_cam_{MM}.json (metres, if available)
+#   Intrinsics:      /scratch/zli33/data/ingroup/intrinsics/intrinsic_ingroup_cam{MM}.json
+#   Extrinsics:      /scratch/zli33/data/ingroup/extrinsics/extrinsic_ingroup_cam{MM}.json (metres, if available)
 
 set -euo pipefail
 
@@ -211,8 +211,8 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
   fi
 
   # Camera-specific intrinsics
-  intrinsic_path_host="$data_path/intrinsics/parameters-camera-${CAM_NUM}.json"
-  intrinsic_path_container="$bind_data_path/intrinsics/parameters-camera-${CAM_NUM}.json"
+  intrinsic_path_host="$data_path/intrinsics/intrinsic_ingroup_cam${CAM_NUM}.json"
+  intrinsic_path_container="$bind_data_path/intrinsics/intrinsic_ingroup_cam${CAM_NUM}.json"
   
   if [ ! -f "$intrinsic_path_host" ]; then
     echo "[WARN] Intrinsics not found: $intrinsic_path_host. Skipping folder $FOLDER_NUM." >&2
@@ -222,8 +222,8 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
   fi
 
   # Camera-specific extrinsics (if available)
-  extrinsics_file_host="$extrinsics_dir_host/extrinsic_cam_${CAM_NUM}.json"
-  extrinsics_file_container="$extrinsics_dir_container/extrinsic_cam_${CAM_NUM}.json"
+  extrinsics_file_host="$extrinsics_dir_host/extrinsic_ingroup_cam${CAM_NUM}.json"
+  extrinsics_file_container="$extrinsics_dir_container/extrinsic_ingroup_cam${CAM_NUM}.json"
   
   echo "[INFO] raw=$raw_path_container"
   echo "[INFO] out=(default: same folder -> meshes_4d_individual/)"
