@@ -28,13 +28,62 @@ class Extrinsics:
         return (X_cam - self.t.view(1, 3)) @ Rt
 
 
+def _find_key(data: Dict, keys: Tuple[str, ...]):
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
+
+
+def _rodrigues_to_matrix(rvec: np.ndarray) -> np.ndarray:
+    r = np.asarray(rvec, dtype=np.float32).reshape(3)
+    theta = float(np.linalg.norm(r))
+    if theta < 1e-12:
+        return np.eye(3, dtype=np.float32)
+
+    k = r / theta
+    kx, ky, kz = [float(v) for v in k]
+    K = np.array(
+        [
+            [0.0, -kz, ky],
+            [kz, 0.0, -kx],
+            [-ky, kx, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    return (
+        np.eye(3, dtype=np.float32)
+        + np.sin(theta) * K
+        + (1.0 - np.cos(theta)) * (K @ K)
+    ).astype(np.float32)
+
+
 def load_extrinsics_json(path: str, device: torch.device) -> Extrinsics:
     import json
 
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    R = torch.tensor(np.asarray(data["rotation"], dtype=np.float32), device=device)
-    t = torch.tensor(np.asarray(data["translation"], dtype=np.float32).reshape(3), device=device)
+    rotation_data = _find_key(data, ("rotation", "R", "rotation_matrix"))
+    if rotation_data is not None:
+        R_np = np.asarray(rotation_data, dtype=np.float32).reshape(3, 3)
+    else:
+        rvec_data = _find_key(data, ("rvec", "rvec_wc", "rotation_vector"))
+        if rvec_data is None:
+            raise KeyError(
+                f"Extrinsics JSON {path!r} must contain either 'rotation'/'R' "
+                "or 'rvec'/'rotation_vector'."
+            )
+        R_np = _rodrigues_to_matrix(np.asarray(rvec_data, dtype=np.float32))
+
+    t_data = _find_key(data, ("translation", "t", "tvec", "tvec_wc", "translation_vector"))
+    if t_data is None:
+        raise KeyError(
+            f"Extrinsics JSON {path!r} must contain 'translation', 't', or 'tvec'."
+        )
+    t_np = np.asarray(t_data, dtype=np.float32).reshape(3)
+
+    R = torch.tensor(R_np, dtype=torch.float32, device=device)
+    t = torch.tensor(t_np, dtype=torch.float32, device=device)
     return Extrinsics(R=R, t=t)
 
 

@@ -41,6 +41,7 @@
 #                        Use this when multi-segment data shows cross-segment jitter.
 #   -simple / --simple:  smooth_mhr_simple.py — no optimization; places meshes
 #                        using mask centroids + a fixed world-height assumption.
+#                        Uses fisheye centroid rays for ingroup camera intrinsics.
 #
 # Paths (host):
 #   Dataset root:   /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
@@ -241,6 +242,7 @@ for FOLDER_NUM in "${folder_nums[@]}"; do
   if [ "$SIMPLE_MODE" = "1" ]; then
     EXTRA_ARGS=(
       --camera-intrinsics-json "$intrinsic_path_container"
+      --centroid-ray-model fisheye
     )
     if [ "$EXTRINSICS_AVAILABLE" = "1" ]; then
       EXTRA_ARGS+=(--extrinsics-json "$extrinsics_file_container")

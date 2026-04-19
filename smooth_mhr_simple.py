@@ -11,6 +11,8 @@ Inputs:
   - raw_mhr.pt from Stage 2
   - Stage 1 masks directory
   - Camera intrinsics + extrinsics
+  - For fisheye cameras, pass ``--centroid-ray-model fisheye`` so mask
+    centroids are converted to rays with ``cv2.fisheye.undistortPoints``.
 
 Outputs (same layout as smooth_mhr_and_export_meshes.py):
   - meshes_4d_individual/<pid>.npz
@@ -107,6 +109,7 @@ def compute_pred_cam_t_from_centroids(
     centroids: Dict[int, Dict[int, Tuple[float, float]]],
     j3d_local: torch.Tensor,
     K: np.ndarray,
+    dist_coeffs: np.ndarray,
     extr: Extrinsics,
     world_scale: float,
     assumed_height_world: float,
@@ -115,6 +118,7 @@ def compute_pred_cam_t_from_centroids(
     T: int,
     N: int,
     hip_indices: Tuple[int, int] = (9, 10),
+    centroid_ray_model: str = "pinhole",
 ) -> torch.Tensor:
     """
     For each (person, frame) compute ``pred_cam_t`` such that:
@@ -149,8 +153,16 @@ def compute_pred_cam_t_from_centroids(
             # Hip midpoint as pelvis proxy (MHR70 joints 9=left_hip, 10=right_hip)
             pelvis_local = j3d_local[bi, list(hip_indices)].cpu().numpy().mean(axis=0)  # (3,)
 
-            # Unnormalised camera ray (z=1)
-            r = np.array([(cx_px - cx_k) / fx, (cy_px - cy_k) / fy, 1.0], dtype=np.float64)
+            # Unnormalised camera ray (z=1). For fisheye/standard distortion,
+            # OpenCV undistortPoints returns normalized image coordinates.
+            r = camera_ray_from_pixel(
+                cx_px,
+                cy_px,
+                K,
+                dist_coeffs,
+                model=centroid_ray_model,
+                pinhole_params=(fx, fy, cx_k, cy_k),
+            )
 
             # Solve for depth z along ray such that world z == assumed_height_world
             # X_world = (z * r * world_scale - t) @ R^T
@@ -169,6 +181,43 @@ def compute_pred_cam_t_from_centroids(
 
     print(f"[INFO] Placed {n_placed} person-frames via centroid + height assumption")
     return pred_cam_t
+
+
+def camera_ray_from_pixel(
+    x_px: float,
+    y_px: float,
+    K: np.ndarray,
+    dist_coeffs: np.ndarray,
+    *,
+    model: str,
+    pinhole_params: Tuple[float, float, float, float],
+) -> np.ndarray:
+    """Return a camera ray with z=1 from a distorted or undistorted pixel."""
+    model = str(model).lower().strip()
+    fx, fy, cx_k, cy_k = pinhole_params
+    if model == "pinhole":
+        return np.array([(x_px - cx_k) / fx, (y_px - cy_k) / fy, 1.0], dtype=np.float64)
+
+    dist = np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
+    if dist.size == 0:
+        raise ValueError(f"--centroid-ray-model {model!r} requires distortion coefficients.")
+
+    import cv2  # type: ignore
+
+    pixel = np.array([[[float(x_px), float(y_px)]]], dtype=np.float64)
+    K64 = np.asarray(K, dtype=np.float64)
+    if model == "fisheye":
+        if dist.size < 4:
+            raise ValueError("--centroid-ray-model 'fisheye' requires at least 4 distortion coefficients.")
+        undist = cv2.fisheye.undistortPoints(pixel, K64, dist[:4].reshape(4, 1))
+    elif model == "standard":
+        undist = cv2.undistortPoints(pixel, K64, dist)
+    else:
+        raise ValueError(
+            f"Unknown centroid ray model {model!r}; expected 'pinhole', 'standard', or 'fisheye'."
+        )
+    x_n, y_n = undist[0, 0]
+    return np.array([float(x_n), float(y_n), 1.0], dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +360,9 @@ def main() -> None:
                         help="Scale from SMPL-X metres to extrinsic units (default 100 = cm)")
     parser.add_argument("--assumed-height", type=float, default=1.0,
                         help="Assumed pelvis height above ground in metres (default 1.0)")
+    parser.add_argument("--centroid-ray-model", choices=["pinhole", "standard", "fisheye"], default="pinhole",
+                        help="How to convert mask-centroid pixels to camera rays "
+                             "(pinhole ignores distortion; fisheye uses cv2.fisheye.undistortPoints)")
     parser.add_argument("--mhr-batch-size", type=int, default=256)
     args = parser.parse_args()
 
@@ -355,12 +407,13 @@ def main() -> None:
     print("[INFO] Released MHR model from GPU")
 
     # ---- Load camera / extrinsics -----------------------------------------
-    K_np, _ = read_camera_intrinsics_new(args.camera_intrinsics_json)
+    K_np, dist_np = read_camera_intrinsics_new(args.camera_intrinsics_json)
     K_np = adjust_K(K_np, scale=float(args.camera_scale))
     extr = load_extrinsics_json(args.extrinsics_json, device=torch.device("cpu"))
     world_scale = float(args.world_scale)
     assumed_height_world = float(args.assumed_height) * world_scale
     print(f"[INFO] Assumed pelvis height: {args.assumed_height} m = {assumed_height_world} world units")
+    print(f"[INFO] Centroid ray model: {args.centroid_ray_model}")
 
     # ---- Compute mask centroids -------------------------------------------
     mask_dir = os.path.join(os.path.dirname(args.raw), "masks")
@@ -375,10 +428,10 @@ def main() -> None:
 
     # ---- Compute pred_cam_t analytically ----------------------------------
     pred_cam_t = compute_pred_cam_t_from_centroids(
-        centroids=centroids, j3d_local=j3d, K=K_np, extr=extr,
+        centroids=centroids, j3d_local=j3d, K=K_np, dist_coeffs=dist_np, extr=extr,
         world_scale=world_scale, assumed_height_world=assumed_height_world,
         obj_ids_all=obj_ids_all, frame_obj_ids_slots=frame_obj_ids_slots,
-        T=T, N=N,
+        T=T, N=N, centroid_ray_model=args.centroid_ray_model,
     )
 
     # Move j3d to device for downstream plotting (pred_cam_t stays CPU-friendly)
