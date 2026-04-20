@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name="smooth_meshes_batch"
-#SBATCH --partition=compute-p2
-#SBATCH --time=12:00:00
+#SBATCH --partition=gpu
+#SBATCH --time=10:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
-#SBATCH --mem-per-cpu=3000M
+#SBATCH --mem-per-cpu=4000M
+#SBATCH --gpus-per-task=1
 #SBATCH --mail-type=END
 #SBATCH --account=research-eemcs-insy
 #SBATCH --output=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
