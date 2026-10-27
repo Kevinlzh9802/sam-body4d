@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name="sam3_masklets_ingroup"
+#SBATCH --job-name="sam3_masklets_cosilab"
 #SBATCH --partition=gpu-a100
 #SBATCH --time=6:00:00
 #SBATCH --ntasks=1
@@ -11,7 +11,7 @@
 #SBATCH --output=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
 #SBATCH --error=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.err
 
-# Batch SAM-3 masklet extraction for ingroup dataset.
+# Batch SAM-3 masklet extraction for cosilab dataset.
 #
 # Required args:
 #   -cam <num>   camera number
@@ -24,9 +24,9 @@
 #   -cam_res_scale <float>   scale annotation [x,y,w,h] to video resolution (default: 0.5)
 #
 # Example:
-#   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1
-#   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1,3-5
-#   sbatch job_scripts/masklets_batch_ingroup.sh -cam 2 -b 1,3-5 -cam_res_scale 0.5
+#   sbatch job_scripts/masklets_batch_cosilab.sh -cam 2 -b 1
+#   sbatch job_scripts/masklets_batch_cosilab.sh -cam 2 -b 1,3-5
+#   sbatch job_scripts/masklets_batch_cosilab.sh -cam 2 -b 1,3-5 -cam_res_scale 0.5
 #
 # Constructed sequence format:
 #   cam%02d_batch%02d (e.g., cam02_batch01)
@@ -37,11 +37,11 @@ home_path=/home/zli33
 scratch_path=/scratch/zli33
 
 model_path=$scratch_path/models/sam4d_checkpoints
-data_path_ingroup=$scratch_path/data/ingroup
+data_path_cosilab=$scratch_path/data/cosilab
 data_path_sam4d=$scratch_path/data/sam4d
 
 bind_model_path=/mnt/sam4d_checkpoints
-bind_data_path_ingroup=/mnt/data/ingroup
+bind_data_path_cosilab=/mnt/data/cosilab
 bind_data_path_sam4d=/mnt/data/sam4d_body
 bind_home_path=/mnt/home/zli33
 
@@ -67,12 +67,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]"
+      echo "Usage: sbatch job_scripts/masklets_batch_cosilab.sh -cam <num> -b <spec> [-cam_res_scale <float>]"
       exit 0
       ;;
     *)
       echo "[ERROR] Unknown argument: $1" >&2
-      echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
+      echo "Usage: sbatch job_scripts/masklets_batch_cosilab.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
       exit 2
       ;;
   esac
@@ -80,7 +80,7 @@ done
 
 if [[ -z "$CAM_NUM" || -z "$BATCH_SPEC" ]]; then
   echo "[ERROR] Both -cam and -b are required." >&2
-  echo "Usage: sbatch job_scripts/masklets_batch_ingroup.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
+  echo "Usage: sbatch job_scripts/masklets_batch_cosilab.sh -cam <num> -b <spec> [-cam_res_scale <float>]" >&2
   exit 2
 fi
 
@@ -160,7 +160,7 @@ print("".join(random.choices(string.ascii_uppercase + string.digits, k=4)))
 PY
 )
 
-snapshot_parent_host="$data_path_ingroup/bbox_kp/_snapshots"
+snapshot_parent_host="$data_path_cosilab/bbox_kp/_snapshots"
 mkdir -p "$snapshot_parent_host"
 code_snapshot_host="$snapshot_parent_host/exp_${timestamp}_${rand_suffix}/code"
 mkdir -p "$code_snapshot_host"
@@ -173,7 +173,7 @@ if rsync -a --delete \
   --exclude "outputs" \
   "$repo_dir/" \
   "$code_snapshot_host/" ; then
-  project_folder="$bind_data_path_ingroup/bbox_kp/_snapshots/exp_${timestamp}_${rand_suffix}/code"
+  project_folder="$bind_data_path_cosilab/bbox_kp/_snapshots/exp_${timestamp}_${rand_suffix}/code"
 else
   echo "[WARN] Failed to create code snapshot; running from live repo in home."
   project_folder="$bind_home_path/projects/sam-body4d"
@@ -194,10 +194,10 @@ for BATCH_NUM in "${batch_nums[@]}"; do
   echo "[INFO] [$idx/$total] Processing sequence: $seq_name"
   echo "=================================================================="
 
-  video_input_folder_container="$bind_data_path_ingroup/video_segs_10s/$seq_name"
-  output_container="$bind_data_path_ingroup/bbox_kp/$seq_name"
+  video_input_folder_container="$bind_data_path_cosilab/video_segs_10s/$seq_name"
+  output_container="$bind_data_path_cosilab/bbox_kp/$seq_name"
 
-  video_input_folder_host="$data_path_ingroup/video_segs_10s/$seq_name"
+  video_input_folder_host="$data_path_cosilab/video_segs_10s/$seq_name"
   if [ ! -d "$video_input_folder_host" ]; then
     echo "[ERROR] Input folder not found: $video_input_folder_host" >&2
     failed=$((failed + 1))
@@ -206,11 +206,11 @@ for BATCH_NUM in "${batch_nums[@]}"; do
   fi
 
   shopt -s nullglob
-  annotation_matches=("$data_path_ingroup/video_frame_annotations/${seq_name}"*)
+  annotation_matches=("$data_path_cosilab/video_frame_annotations/${seq_name}"*)
   shopt -u nullglob
 
   if [ ${#annotation_matches[@]} -eq 0 ]; then
-    echo "[ERROR] No annotation folder found for pattern: $data_path_ingroup/video_frame_annotations/${seq_name}*" >&2
+    echo "[ERROR] No annotation folder found for pattern: $data_path_cosilab/video_frame_annotations/${seq_name}*" >&2
     failed=$((failed + 1))
     echo ""
     continue
@@ -224,8 +224,8 @@ for BATCH_NUM in "${batch_nums[@]}"; do
     echo "       $annotation_folder_host"
   fi
 
-  annotation_folder_container="$bind_data_path_ingroup/video_frame_annotations/$(basename "$annotation_folder_host")"
-  mkdir -p "$data_path_ingroup/bbox_kp/$seq_name"
+  annotation_folder_container="$bind_data_path_cosilab/video_frame_annotations/$(basename "$annotation_folder_host")"
+  mkdir -p "$data_path_cosilab/bbox_kp/$seq_name"
 
   echo "[INFO] input-folder=$video_input_folder_container"
   echo "[INFO] annotation-folder=$annotation_folder_container"
@@ -233,7 +233,7 @@ for BATCH_NUM in "${batch_nums[@]}"; do
 
   if apptainer exec --nv \
     --bind $model_path:$bind_model_path \
-    --bind $data_path_ingroup:$bind_data_path_ingroup \
+    --bind $data_path_cosilab:$bind_data_path_cosilab \
     --bind $data_path_sam4d:$bind_data_path_sam4d \
     --bind $home_path:$bind_home_path \
     --env PYTHONPATH=$project_folder/models/sam3:$project_folder:${PYTHONPATH:-} \

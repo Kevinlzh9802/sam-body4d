@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name="raw_mhr_ingroup"
+#SBATCH --job-name="raw_mhr_cosilab"
 #SBATCH --partition=gpu-a100
 #SBATCH --time=23:00:00
 #SBATCH --ntasks=1
@@ -11,28 +11,28 @@
 #SBATCH --output=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
 #SBATCH --error=/scratch/zli33/slurm_outputs/sam_4d_body/slurm_%j.err
 
-# Batch Stage 2: raw MHR params for ingroup dataset.
+# Batch Stage 2: raw MHR params for cosilab dataset.
 #
-# Folder format: /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
+# Folder format: /scratch/zli33/data/cosilab/bbox_kp/cam{MM}_batch{NN}
 #   where MM = 2-digit camera number, NN = 2-digit batch number.
 # Each folder contains images/ (00000000.jpg..00017999.jpg),
 #   masks/ (00000000.png..00017999.png), id_mapping.json.
 # Intrinsics derived from camera number:
-#   /scratch/zli33/data/ingroup/intrinsics/parameters-camera-{MM}.json
+#   /scratch/zli33/data/cosilab/intrinsics/parameters-camera-{MM}.json
 #
 # Supports splitting into 3 parts (p1/p2/p3) of 6000 frames each.
 # The last part to finish auto-merges all 3.
 #
 # Usage (full run — all 18000 frames in one job):
-#   sbatch job_scripts/raw_mhr_batch_delftblue_ingroup.sh cam06_batch01
+#   sbatch job_scripts/raw_mhr_batch_delftblue_cosilab.sh cam06_batch01
 #
 # Usage (split into 3 parallel jobs):
-#   sbatch job_scripts/raw_mhr_batch_delftblue_ingroup.sh cam06_batch01 p1
-#   sbatch job_scripts/raw_mhr_batch_delftblue_ingroup.sh cam06_batch01 p2
-#   sbatch job_scripts/raw_mhr_batch_delftblue_ingroup.sh cam06_batch01 p3
+#   sbatch job_scripts/raw_mhr_batch_delftblue_cosilab.sh cam06_batch01 p1
+#   sbatch job_scripts/raw_mhr_batch_delftblue_cosilab.sh cam06_batch01 p2
+#   sbatch job_scripts/raw_mhr_batch_delftblue_cosilab.sh cam06_batch01 p3
 #
 # Usage (manual merge, CPU-only):
-#   sbatch job_scripts/raw_mhr_batch_delftblue_ingroup.sh cam06_batch01 merge
+#   sbatch job_scripts/raw_mhr_batch_delftblue_cosilab.sh cam06_batch01 merge
 
 set -euo pipefail
 
@@ -40,10 +40,10 @@ home_path=/home/zli33
 scratch_path=/scratch/zli33
 
 model_path=$scratch_path/models/sam4d_checkpoints
-data_path=$scratch_path/data/ingroup
+data_path=$scratch_path/data/cosilab
 
 bind_model_path=/mnt/sam4d_checkpoints
-bind_data_path=/mnt/data/ingroup
+bind_data_path=/mnt/data/cosilab
 bind_home_path=/mnt/home/zli33
 
 sif_path=$scratch_path/apptainers/body4d_osmesa.sif
@@ -73,7 +73,7 @@ done
 
 if [ -z "$FOLDER_NAME" ]; then
   echo "[ERROR] Folder name must be provided (e.g. cam06_batch01)." >&2
-  echo "  Usage: sbatch raw_mhr_batch_delftblue_ingroup.sh cam06_batch01 [p1|p2|p3|merge]" >&2
+  echo "  Usage: sbatch raw_mhr_batch_delftblue_cosilab.sh cam06_batch01 [p1|p2|p3|merge]" >&2
   exit 2
 fi
 

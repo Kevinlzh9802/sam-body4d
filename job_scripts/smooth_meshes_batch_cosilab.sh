@@ -11,27 +11,27 @@
 #SBATCH --output=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.out
 #SBATCH --error=/home/zli33/slurm_outputs/sam_4d_body/slurm_%j.err
 
-# Batch Stage 3: smooth raw MHR params and export meshes for ingroup dataset.
+# Batch Stage 3: smooth raw MHR params and export meshes for cosilab dataset.
 #
-# Folder format: /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
+# Folder format: /scratch/zli33/data/cosilab/bbox_kp/cam{MM}_batch{NN}
 #   where MM = 2-digit camera number, NN = 2-digit batch number.
 # Each folder must contain raw_mhr.pt and masks/ (from Stage 1/2).
 # Output: meshes_4d_individual/ under the same folder (default --out = dirname of raw).
 #
 # Usage (single folder, full-sequence Stage 3):
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh cam06_batch01
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh cam08_batch02
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh cam06_batch01
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh cam08_batch02
 #
 # Usage (single folder, per-segment Stage 3):
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh -segment cam06_batch01
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh -segment cam06_batch01
 #
 # Usage (single folder, simple centroid-based placement):
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh -simple cam06_batch01
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh -simple cam06_batch01
 #
 # Usage (all folders with camera prefix):
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all cam06
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all -segment cam06
-#   sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all -simple cam06
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all cam06
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all -segment cam06
+#   sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all -simple cam06
 #
 # Stage 3 mode:
 #   Default ("full"):   smooth_mhr_and_export_meshes.py — processes the entire
@@ -44,9 +44,9 @@
 #                        Uses fisheye centroid rays for ingroup camera intrinsics.
 #
 # Paths (host):
-#   Dataset root:   /scratch/zli33/data/ingroup/bbox_kp/cam{MM}_batch{NN}
-#   Intrinsics:      /scratch/zli33/data/ingroup/intrinsics/intrinsic_ingroup_cam{MM}.json
-#   Extrinsics:      /scratch/zli33/data/ingroup/extrinsics/extrinsic_ingroup_cam{MM}.json (metres, if available)
+#   Dataset root:   /scratch/zli33/data/cosilab/bbox_kp/cam{MM}_batch{NN}
+#   Intrinsics:      /scratch/zli33/data/cosilab/intrinsics/parameters-camera-{MM}.json
+#   Extrinsics:      /scratch/zli33/data/cosilab/extrinsics/extrinsic_cam_{MM}.json (if available)
 
 set -euo pipefail
 
@@ -54,10 +54,10 @@ home_path=/home/zli33
 scratch_path=/scratch/zli33
 
 model_path=$scratch_path/models/sam4d_checkpoints
-data_path=$scratch_path/data/ingroup
+data_path=$scratch_path/data/cosilab
 
 bind_model_path=/mnt/sam4d_checkpoints
-bind_data_path=/mnt/data/ingroup
+bind_data_path=/mnt/data/cosilab
 bind_home_path=/mnt/home/zli33
 
 # Intrinsics and extrinsics are camera-specific (derived from folder name)
@@ -101,12 +101,12 @@ INPUT_ARG="${INPUT_ARG:-${VIDEO_NUM:-}}"
 
 if [ -z "${INPUT_ARG:-}" ]; then
   echo "[ERROR] Folder name or camera prefix must be provided." >&2
-  echo "  Usage: sbatch job_scripts/smooth_meshes_batch_ingroup.sh cam06_batch01" >&2
-  echo "         sbatch job_scripts/smooth_meshes_batch_ingroup.sh -segment cam06_batch01" >&2
-  echo "         sbatch job_scripts/smooth_meshes_batch_ingroup.sh -simple cam06_batch01" >&2
-  echo "         sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all cam06" >&2
-  echo "         sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all -segment cam06" >&2
-  echo "         sbatch job_scripts/smooth_meshes_batch_ingroup.sh -all -simple cam06" >&2
+  echo "  Usage: sbatch job_scripts/smooth_meshes_batch_cosilab.sh cam06_batch01" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_cosilab.sh -segment cam06_batch01" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_cosilab.sh -simple cam06_batch01" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all cam06" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all -segment cam06" >&2
+  echo "         sbatch job_scripts/smooth_meshes_batch_cosilab.sh -all -simple cam06" >&2
   exit 2
 fi
 
