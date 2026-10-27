@@ -20,7 +20,7 @@ Each annotation JSON has the same base name as the segment (e.g. 428_seg001.json
 The script derives (x, y, w, h) from the two points and builds consecutive IDs for tracking.
 
 Usage:
-  python run_sam3_masklets_batch.py \\
+  python stage1_masklet.py \\
       --input-folder /mnt/data/sam4d_body/inputs/videos/428 \\
       --annotation-folder /mnt/data/sam4d_body/inputs/annotations/428 \\
       --output /mnt/data/sam4d_body/outputs/exp_XXX/masklets \\

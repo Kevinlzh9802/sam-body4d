@@ -14,7 +14,7 @@ Inputs:
   - For fisheye cameras, pass ``--centroid-ray-model fisheye`` so mask
     centroids are converted to rays with ``cv2.fisheye.undistortPoints``.
 
-Outputs (same layout as smooth_mhr_and_export_meshes.py):
+Outputs (same layout as stage3_mhr_full.py):
   - meshes_4d_individual/<pid>.npz
   - ground_plane_plots/
   - reproj_overlay/
@@ -221,7 +221,7 @@ def camera_ray_from_pixel(
 
 
 # ---------------------------------------------------------------------------
-# Batched MHR forward (same as smooth_mhr_and_export_meshes.py)
+# Batched MHR forward (same as stage3_mhr_full.py)
 # ---------------------------------------------------------------------------
 
 def run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N):
@@ -263,7 +263,7 @@ def run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N):
 
 
 # ---------------------------------------------------------------------------
-# Per-person NPZ export (same as smooth_mhr_and_export_meshes.py)
+# Per-person NPZ export (same as stage3_mhr_full.py)
 # ---------------------------------------------------------------------------
 
 def export_per_person_meshes(verts, pred_cam_t, obj_ids_all, frame_obj_ids_slots,

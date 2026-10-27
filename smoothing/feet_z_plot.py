@@ -153,7 +153,7 @@ def plot_feet_z_from_stage3(
 ) -> None:
     """
     Convenience function to compute and plot feet z-coordinates in one call.
-    Called from smooth_mhr_and_export_meshes.py after stage 3 processing.
+    Called from stage3_mhr_full.py after stage 3 processing.
     
     Args:
         world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).

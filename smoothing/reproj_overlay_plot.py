@@ -267,7 +267,7 @@ def render_overlay_frame(
 
 
 # --------------------------------------------------------------------------- #
-#  Batch entry-point (called from smooth_mhr_and_export_meshes.py)             #
+#  Batch entry-point (called from stage3_mhr_full.py)             #
 # --------------------------------------------------------------------------- #
 
 def plot_reproj_overlays_from_stage3(

@@ -11,7 +11,7 @@ smoothers treat the concatenated multi-segment sequence as one
 continuous trajectory.
 
 Usage:
-  python smooth_mhr_per_segment.py \\
+  python stage3_mhr_segment.py \\
       --raw /path/to/raw_mhr.pt \\
       --config configs/body4d.yaml \\
       --camera-intrinsics-json /path/to/intrinsics.json \\
@@ -63,7 +63,7 @@ from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
 from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
-from smooth_mhr_and_export_meshes import (
+from stage3_mhr_full import (
     run_batched_mhr_forward,
     export_per_person_meshes,
     generate_reproj_overlays,
@@ -480,7 +480,7 @@ def main() -> None:
 
     if not segment_id_mappings:
         print("[ERROR] No segment_id_mappings found. This script requires per-segment "
-              "metadata from run_sam3_masklets_batch.py. Use smooth_mhr_and_export_meshes.py "
+              "metadata from stage1_masklet.py. Use stage3_mhr_full.py "
               "for single-segment data.")
         sys.exit(1)
 

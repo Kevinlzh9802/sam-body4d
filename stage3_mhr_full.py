@@ -3,7 +3,7 @@
 Stage 3 (decoupled): raw MHR params -> temporal smoothing -> mhr_forward -> meshes.
 
 Input:
-  - raw_mhr.pt produced by run_sam3d_body_raw_params.py
+  - raw_mhr.pt produced by stage2_sam3body.py
 
 Output:
   - meshes_4d_individual/<pid>.npz  (one compressed archive per person containing
@@ -266,7 +266,7 @@ def generate_reproj_overlays(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 3: smooth raw params and export meshes")
-    parser.add_argument("--raw", required=True, help="raw_mhr.pt from run_sam3d_body_raw_params.py")
+    parser.add_argument("--raw", required=True, help="raw_mhr.pt from stage2_sam3body.py")
     parser.add_argument("--config", default=None, help="Config YAML (default: configs/body4d.yaml)")
     parser.add_argument("--out", default=None, help="Output dir (default: alongside raw file)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", choices=["cuda", "cpu"])

@@ -22,7 +22,7 @@ def check_mhr(pt_path: str) -> Dict[str, Any]:
     """
     Load a raw MHR payload and print a short summary.
 
-    Expected payload (from run_sam3d_body_raw_params.py):
+    Expected payload (from stage2_sam3body.py):
       - "frames": list of dicts with "frame", "people", "obj_ids"
       - "meta": optional dict
     """

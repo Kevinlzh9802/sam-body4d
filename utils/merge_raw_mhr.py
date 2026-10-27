@@ -1,6 +1,6 @@
 """
 Merge partial ``raw_mhr_part_*.pt`` files produced by
-``run_sam3d_body_raw_params.py --frame-start/--frame-end`` into a single
+``stage2_sam3body.py --frame-start/--frame-end`` into a single
 ``raw_mhr.pt``.
 
 The individual part files are always kept on disk after merging.
