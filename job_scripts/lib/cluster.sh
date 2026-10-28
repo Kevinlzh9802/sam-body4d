@@ -36,6 +36,8 @@ case "$CLUSTER" in
     DATA_BASE_HOST=$NEON_HOST/zonghuan/data
     MODEL_HOST=$NEON_HOST/models/sam4d_checkpoints
     SIF_PATH=$NEON_HOST/apptainer/body4d_osmesa.sif
+    # torch cu128 build (apptainer/build.sh cu128) for Blackwell GPUs (RTX Pro 6000)
+    SIF_PATH_CU128=$NEON_HOST/apptainer/body4d_osmesa_cu128.sif
     LOG_DIR=$HOME_HOST/slurm_outputs/sam_4d_body
     COSILAB_PROJECT_HOST="${SB4D_COSILAB_PROJECT:-$NEON_HOST/cosilab_project}"
     ;;

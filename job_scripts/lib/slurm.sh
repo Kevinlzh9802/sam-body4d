@@ -8,21 +8,22 @@
 # Builds SBATCH_FLAGS for <stage> on $CLUSTER.
 # Stages: stage1, stage2 (full sequence), stage2_part (one -part), stage2_merge, stage3.
 #
-# DAIC follows https://doc.daic.tudelft.nl/tutorials/slurm/: --account is
-# required, --partition=all, GPUs by full type name. The container's PyTorch
-# (2.7.1+cu118) supports A40/L40 but not the RTX Pro 6000 (Blackwell) nodes, so
-# an A40 (48 GB) is requested; override with -sbatch "--gres=gpu:nvidia_l40:1".
-# DAIC time/memory are estimates from DelftBlue runs of a cosilab batch
-# (960x540, 18000 frames, ~22 people/frame); check `seff <jobid>` and adjust.
+# DAIC (new environment, https://doc.daic.tudelft.nl/tutorials/slurm/): GPUs by
+# full type name. Stage 2 uses an RTX Pro 6000 (96 GB, Blackwell), which needs
+# the CUDA 12.8 image (SIF_PATH_CU128, selected in stage2_sam3body.sh). Stage 3
+# stays on an A40 (48 GB) with the cu118 image. Override the GPU with e.g.
+# -sbatch "--gres=gpu:nvidia_l40:1". Memory is estimated from DelftBlue runs of
+# a cosilab batch (960x540, 18000 frames); check `seff <jobid>` and adjust.
+# Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb.
 sbatch_flags() {
-  local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem
+  local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem daic_gpu
   case "$stage" in
     #             DelftBlue                                                     DAIC
-    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=""; daic_cpus=""; daic_mem="" ;;
-    stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=7-00:00:00; daic_cpus=4; daic_mem=32G ;;
-    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=3-00:00:00; daic_cpus=4; daic_mem=32G ;;
-    stage2_merge) time=2:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=2:00:00;    daic_cpus=2; daic_mem=32G ;;
-    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=250G ;;
+    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=""; daic_cpus=""; daic_mem=""; daic_gpu="" ;;
+    stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=3-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=1-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage2_merge) time=2:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=2:00:00;    daic_cpus=2; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=250G; daic_gpu=nvidia_a40 ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 
@@ -45,35 +46,15 @@ sbatch_flags() {
     )
   else
     [ -n "$daic_time" ] || { echo "[ERROR] $stage has no DAIC resources" >&2; exit 2; }
-    local account
-    account="$(daic_account)" || exit 2
     SBATCH_FLAGS+=(
-      --account="$account"
+      --account="${SB4D_ACCOUNT:-daic-eemcs-insy-prb}"
       --time="$daic_time"
-      --partition=all
+      --partition=ewi-insy,all
       --cpus-per-task="$daic_cpus"
       --mem="$daic_mem"
-      --gres=gpu:nvidia_a40:1
+      --gres="gpu:$daic_gpu:1"
     )
   fi
-}
-
-# DAIC billing account: $SB4D_ACCOUNT, else the first of the user's Slurm
-# associations (`sacctmgr show associations user=$USER`).
-daic_account() {
-  local account="${SB4D_ACCOUNT:-}"
-  if [ -z "$account" ] && command -v sacctmgr >/dev/null 2>&1; then
-    account="$(sacctmgr -n -P show associations user="$USER" format=Account 2>/dev/null | head -n1)"
-  fi
-  if [ -z "$account" ]; then
-    if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
-      echo "<account>"
-      return 0
-    fi
-    echo "[ERROR] No DAIC account found; set SB4D_ACCOUNT=<account>" >&2
-    return 1
-  fi
-  echo "$account"
 }
 
 # On a login node: snapshot the code, submit <script> with <stage> flags and the

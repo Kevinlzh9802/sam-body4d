@@ -27,8 +27,11 @@
 #   -dataset <cosilab|conflab>   default: cosilab
 #   -cam <num> -b <spec> | -all <prefix> | <seq> ...   (see lib/common.sh)
 #   -part <p1|p2|p3|merge>       split run; needs exactly one sequence
-#   -batch_size <n>              frames per inference call (default: 16 on DelftBlue,
-#                                8 on DAIC: bs 16 peaks at ~56 GB, an A40 has 48 GB)
+#   -batch_size <n>              frames per inference call (default 16, peaks at ~56 GB
+#                                GPU memory; use 8 on a 48 GB A40/L40)
+#
+# On DAIC this runs on an RTX Pro 6000 (Blackwell) with the CUDA 12.8 image
+# ($SIF_PATH_CU128, built with apptainer/build.sh cu128).
 #   -sbatch "<flags>"            extra sbatch flags, e.g. "--time=10:00:00" for a part
 set -euo pipefail
 
@@ -63,9 +66,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [ -z "$BATCH_SIZE" ] && [ "$CLUSTER" = daic ]; then
-  BATCH_SIZE=8
-fi
 [ -z "$BATCH_SIZE" ] || [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || die "-batch_size must be a positive integer, got: $BATCH_SIZE"
 
 STAGE=stage2
@@ -87,6 +87,9 @@ esac
 BATCH_ARGS=()
 [ -z "$BATCH_SIZE" ] || BATCH_ARGS=(--batch-size "$BATCH_SIZE")
 
+# Blackwell GPUs need torch built for CUDA >= 12.8
+[ "$CLUSTER" != daic ] || SIF_PATH=$SIF_PATH_CU128
+
 load_dataset "$DATASET_ARG"
 resolve_seqs "$STAGE1_DIR"
 if [ -n "$PART" ] && [ ${#SEQS[@]} -ne 1 ]; then
@@ -98,6 +101,7 @@ echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
 echo "[INFO] Sequences: ${SEQS[*]}  Part: ${PART:-full}  batch size: ${BATCH_SIZE:-default}"
 echo "[INFO] Stage 1 dir: $STAGE1_DIR"
 echo "[INFO] Output dir:  $RAW_DIR"
+echo "[INFO] Container:   $SIF_PATH"
 echo ""
 
 total=${#SEQS[@]}
