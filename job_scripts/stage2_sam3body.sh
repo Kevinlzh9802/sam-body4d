@@ -6,7 +6,7 @@
 # cosilab on DAIC (see lib/dataset.sh), where the Stage 1 folder is only read.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
-# snapshots the code and submits itself to SLURM.
+# submits itself to SLURM, running the code checkout at CODE_HOST (lib/cluster.sh).
 #
 # Usage:
 #   bash job_scripts/stage2_sam3body.sh cam06_batch01                # full run, one job

@@ -57,8 +57,8 @@ sbatch_flags() {
   fi
 }
 
-# On a login node: snapshot the code, submit <script> with <stage> flags and the
-# original args, then exit. Inside a SLURM job (or an interactive allocation)
+# On a login node: submit <script> with <stage> flags and the original args,
+# then exit. Inside a SLURM job (or an interactive allocation)
 # it returns so the caller does the work.
 # With SB4D_DRY_RUN=1 it prints the sbatch command and returns, so the caller
 # prints the container commands too.
@@ -68,7 +68,6 @@ self_submit() {
   [ -n "${SLURM_JOB_ID:-}" ] && return 0
 
   sbatch_flags "$stage"
-  make_snapshot
 
   local extra=()
   [ -n "$EXTRA_SBATCH" ] && read -r -a extra <<< "$EXTRA_SBATCH"

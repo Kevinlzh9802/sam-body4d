@@ -2,8 +2,8 @@
 # Stage 1: SAM-3 masklets (stage1_masklet.py) -> <dataset>/bbox_kp/<seq>/
 #   images.zip, masks.zip, id_mapping.json, masklets_meta.json, video_mask.mp4, ...
 #
-# Run with bash on a DelftBlue login node; the script snapshots the code and
-# submits itself to SLURM. Not implemented on DAIC.
+# Run with bash on a DelftBlue login node; the script submits
+# itself to SLURM, running the code checkout at CODE_HOST. Not implemented on DAIC.
 #
 # Usage:
 #   bash job_scripts/stage1_masklet.sh -cam 2 -b 1                 # cosilab cam02_batch01

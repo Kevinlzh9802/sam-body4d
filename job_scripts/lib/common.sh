@@ -1,6 +1,7 @@
 #!/bin/bash
 # Shared helpers for the stage launchers in job_scripts/. Source this file after
-# setting SB4D_CODE to the repo (or snapshot) root on the host.
+# setting SB4D_CODE to the repo root on the host; it must be the cluster's
+# CODE_HOST checkout (see lib/cluster.sh).
 #
 # Common launcher arguments (handled by parse_common_args):
 #   -dataset <cosilab|conflab>   dataset (default: cosilab)
@@ -10,7 +11,8 @@
 #   -sbatch "<flags>"            extra sbatch flags, appended last (e.g. "--time=4:00:00")
 #   -h                           show the launcher's usage
 # Env: CONFIG_REL (config path, default configs/body4d.yaml), SB4D_DRY_RUN=1
-# (print sbatch/apptainer commands instead of running them), SB4D_CLUSTER.
+# (print sbatch/apptainer commands instead of running them), SB4D_CLUSTER,
+# SB4D_CODE_HOST.
 
 LIB_DIR="$SB4D_CODE/job_scripts/lib"
 source "$LIB_DIR/cluster.sh"
@@ -30,6 +32,11 @@ die() {
   echo "[ERROR] $*" >&2
   exit 2
 }
+
+if [ "$(realpath -m "$SB4D_CODE")" != "$(realpath -m "$CODE_HOST")" ]; then
+  die "Launcher is in $SB4D_CODE, but jobs on $CLUSTER run the checkout at $CODE_HOST. Start it from there."
+fi
+SB4D_CODE="$CODE_HOST"
 
 # Prints the comment block at the top of a launcher script.
 usage() {
@@ -121,36 +128,12 @@ resolve_seqs() {
   [ ${#SEQS[@]} -gt 0 ] || die "No sequences given (see -h)"
 }
 
-# Copies the repo to <dataset>/bbox_kp/_snapshots/exp_<ts>_<rand>/code and points
-# SB4D_CODE at it, so queued jobs are unaffected by later edits. Falls back to
-# the live repo if rsync fails.
-make_snapshot() {
-  local snap
-  snap="$BBOX_DIR/_snapshots/exp_$(date +%Y%m%d_%H%M%S)_$(printf '%04X' "$RANDOM")/code"
-  if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
-    echo "[DRY-RUN] snapshot $SB4D_CODE -> $snap"
-    return 0
-  fi
-  mkdir -p "$snap"
-  echo "[INFO] Creating code snapshot in: $snap"
-  if rsync -a --delete \
-    --exclude ".git" \
-    --exclude "__pycache__" \
-    --exclude "*.pyc" \
-    --exclude "outputs" \
-    "$SB4D_CODE/" "$snap/"; then
-    SB4D_CODE="$snap"
-  else
-    echo "[WARN] Failed to create code snapshot; running from live repo: $SB4D_CODE" >&2
-  fi
-}
-
 # Sets BINDS to the container mounts (host:container[:ro]).
 container_binds() {
   BINDS=(
     "$DATA_ROOT:$BIND_DATA"
     "$MODEL_HOST:$BIND_MODEL"
-    "$HOME_HOST:$BIND_HOME"
+    "$CODE_HOST:$BIND_CODE"
     ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}
   )
 }
@@ -174,8 +157,7 @@ host_to_container() {
 run_in_container() {
   local script="$1"
   shift
-  local project b
-  project="$(host_to_container "$SB4D_CODE")"
+  local project="$BIND_CODE" b
   container_binds
   local cmd=(apptainer exec --nv)
   for b in "${BINDS[@]}"; do
