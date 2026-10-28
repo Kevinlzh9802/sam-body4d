@@ -1,6 +1,6 @@
 .vscode/
 .cursor/
-apptainer/
+apptainer/*.sif
 __pycache__/
 gradio_tmp/
 outputs/

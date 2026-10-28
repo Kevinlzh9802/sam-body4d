@@ -1,13 +1,19 @@
 Bootstrap: docker
 From: ubuntu:22.04
 
+%arguments
+    # PyTorch CUDA wheel tag: cu118 (A40/L40/A100) or cu128 (adds Blackwell, e.g. RTX Pro 6000)
+    TORCH_CUDA=cu118
+
 %labels
     Author sam-body4d
     Description SAM-Body4D (with SAM3 installed as a real Python package)
+    TorchCuda {{ TORCH_CUDA }}
 
 %help
-    Build:
-      apptainer build body4d.sif apptainer/body4d.def
+    Build (from a clean export of HEAD, see apptainer/build.sh):
+      bash apptainer/build.sh cu118   # -> body4d_osmesa.sif
+      bash apptainer/build.sh cu128   # -> body4d_osmesa_cu128.sif
 
     Run (GPU):
       apptainer exec --nv --bind /path/to/checkpoints:/checkpoints body4d.sif \
@@ -68,7 +74,7 @@ From: ubuntu:22.04
 
     # --- Core deps (match README; adjust CUDA wheel index as needed) ---
     # NOTE: on clusters, you typically run with `apptainer exec --nv ...` so the host driver is used.
-    python -m pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+    python -m pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/{{ TORCH_CUDA }}
     python -m pip install "git+https://github.com/facebookresearch/detectron2.git@a1ce2f9" --no-build-isolation --no-deps
 
     # --- IMPORTANT: install SAM3 as an actual package ---
