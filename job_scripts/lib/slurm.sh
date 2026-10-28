@@ -16,7 +16,7 @@
 # (960x540, 18000 frames, 23 people): stage 3 keeps one T*N x 18439 x 3 float32
 # vertex tensor (~92 GB) in RAM. Check `seff <jobid>` and adjust.
 # Partition "all" (the department partition ewi-insy is not open to this user).
-# Account: $SB4D_ACCOUNT, default ewi-insy (works with --partition=all).
+# Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb (verified with sbatch --test-only).
 sbatch_flags() {
   local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem daic_gpu
   case "$stage" in
@@ -49,7 +49,7 @@ sbatch_flags() {
   else
     [ -n "$daic_time" ] || { echo "[ERROR] $stage has no DAIC resources" >&2; exit 2; }
     SBATCH_FLAGS+=(
-      --account="${SB4D_ACCOUNT:-ewi-insy}"
+      --account="${SB4D_ACCOUNT:-daic-eemcs-insy-prb}"
       --time="$daic_time"
       --partition=all
       --cpus-per-task="$daic_cpus"
