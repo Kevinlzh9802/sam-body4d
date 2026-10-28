@@ -13,6 +13,13 @@
 #   intrinsics    intrinsics/parameters-camera-{MM}.json    intrinsics/parameters-camera-04.json
 #   extrinsics    extrinsics/extrinsic_cam_{MM}.json        extrinsics/extrinsic_zh_<first digit>.json
 #                 (optional)                                (required by Stage 3)
+#
+# Per-sequence stage folders (<dir>/<seq>/) default to bbox_kp/ for all stages.
+# cosilab on DAIC reads Stage 1 output from the 4TU upload (mounted read-only,
+# never written to) and writes Stage 2/3 to data_temp:
+#   STAGE1_DIR  $COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
+#   RAW_DIR     $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
+#   SMOOTH_DIR  $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed
 
 load_dataset() {
   DATASET="$1"
@@ -37,6 +44,21 @@ load_dataset() {
   BIND_DATA=/mnt/data/$DATASET
   BBOX_DIR=$DATA_ROOT/bbox_kp
   VIDEO_DIR=$DATA_ROOT/$VIDEO_SUBDIR
+
+  STAGE1_DIR=$BBOX_DIR
+  RAW_DIR=$BBOX_DIR
+  SMOOTH_DIR=$BBOX_DIR
+  # Extra host:container[:ro] mounts for run_in_container
+  EXTRA_BINDS=()
+  if [ "$CLUSTER" = daic ] && [ "$DATASET" = cosilab ]; then
+    STAGE1_DIR=$COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
+    RAW_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
+    SMOOTH_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed
+    EXTRA_BINDS=(
+      "$COSILAB_PROJECT_HOST/4TU_upload:/mnt/cosilab_4tu:ro"
+      "$COSILAB_PROJECT_HOST/data_temp:/mnt/cosilab_temp"
+    )
+  fi
 }
 
 # Two-digit camera number of a cosilab sequence (cam06_batch01 -> 06).

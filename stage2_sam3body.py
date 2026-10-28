@@ -6,9 +6,12 @@ Inputs:
   - Stage1 folder with images/ and masks/ (palette masks where pixel value is obj_id)
   - Config YAML for SAM-3D-Body
 
-Outputs:
+Outputs (in --output-dir, default: the Stage1 folder):
   - raw_mhr.pt (torch serialized): contains pose_output["mhr"] tensors (flattened B=T*N)
     plus metadata needed for Stage3 smoothing.
+
+With --output-dir different from --input, the Stage1 folder is only read: zipped
+images/masks are extracted to a temp dir ($TMPDIR) instead of next to the archives.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ from utils.merge_raw_mhr import (
     merge_raw_mhr_parts, all_parts_ready, discover_part_files, NUM_EXPECTED_PARTS,
 )
 from utils.model_factory import build_sam3d_body_from_config
-from utils.zip_utils import unzip_if_needed, zip_and_remove_dir
+from utils.zip_utils import make_extract_root, resolve_archive_dir, zip_and_remove_dir
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +200,13 @@ def save_per_segment_raw_mhr(
     frames: List[Dict[str, Any]],
     segment_id_mappings: List[Dict[str, Any]],
     input_dir: str,
+    out_dir: str,
     cfg_path: str,
     camera_intrinsics_path: str,
     camera_scale: float,
 ) -> None:
-    """Save one raw_mhr .pt file per segment for debugging."""
-    seg_dir = os.path.join(input_dir, "raw_mhr_segments")
+    """Save one raw_mhr .pt file per segment (in *out_dir*/raw_mhr_segments/) for debugging."""
+    seg_dir = os.path.join(out_dir, "raw_mhr_segments")
     os.makedirs(seg_dir, exist_ok=True)
     for seg_idx, seg in enumerate(segment_id_mappings):
         fs, fe = int(seg["frame_start"]), int(seg["frame_end"])
@@ -234,16 +238,17 @@ def save_per_segment_raw_mhr(
 # Post-merge diagnostics (called after merge completes)
 # ---------------------------------------------------------------------------
 
-def _run_post_merge(input_dir: str, all_frames: List[Dict[str, Any]], meta: Dict[str, Any]) -> None:
-    """Generate summary / per-segment debug files after a merge."""
+def _run_post_merge(out_dir: str, all_frames: List[Dict[str, Any]], meta: Dict[str, Any]) -> None:
+    """Generate summary / per-segment debug files in *out_dir* after a merge."""
+    input_dir = meta.get("input_dir") or out_dir
     segment_id_mappings = meta.get("segment_id_mappings") or load_segment_id_mappings(input_dir)
     save_mesh_prediction_summary(
         all_frames, segment_id_mappings,
-        os.path.join(input_dir, "mesh_prediction_summary.json"),
+        os.path.join(out_dir, "mesh_prediction_summary.json"),
     )
     if segment_id_mappings:
         save_per_segment_raw_mhr(
-            all_frames, segment_id_mappings, input_dir,
+            all_frames, segment_id_mappings, input_dir, out_dir,
             meta.get("config_path", ""),
             meta.get("camera_intrinsics", ""),
             float(meta.get("camera_scale", 0.5)),
@@ -272,11 +277,13 @@ def main() -> None:
                     "and merging (--merge).",
     )
     parser.add_argument("--input", required=True, help="Stage1 output dir (contains images/, masks/)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Where all outputs go (default: --input). If different, --input is never written to.")
     parser.add_argument("--intrinsic-path", default=None,
                         help="Path to camera intrinsics JSON. If unset, derived from input path.")
     parser.add_argument("--config", default=None, help="Config YAML (default: configs/body4d.yaml)")
     parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference call")
-    parser.add_argument("--out", default=None, help="Output .pt path (default: <input>/raw_mhr.pt)")
+    parser.add_argument("--out", default=None, help="Output .pt path (default: <output-dir>/raw_mhr.pt)")
     parser.add_argument("--camera-scale", type=float, default=0.5)
 
     # Partial-run arguments
@@ -286,32 +293,35 @@ def main() -> None:
                         help="Last frame index to process (exclusive). E.g. --frame-start 0 --frame-end 2400 processes frames [0,2400).")
     parser.add_argument("--part-label", default=None,
                         help="Label for this part (default: auto from frame range). "
-                             "Output goes to <input>/raw_mhr_parts/raw_mhr_part_<label>.pt")
+                             "Output goes to <output-dir>/raw_mhr_parts/raw_mhr_part_<label>.pt")
     # Merge mode
     parser.add_argument("--merge", action="store_true",
-                        help="Merge all raw_mhr_part_*.pt in <input>/raw_mhr_parts/ into raw_mhr.pt and exit.")
+                        help="Merge all raw_mhr_part_*.pt in <output-dir>/raw_mhr_parts/ into raw_mhr.pt and exit.")
 
     args = parser.parse_args()
 
+    input_dir = args.input
+    output_dir = args.output_dir or input_dir
+    # Separate output dir => treat the Stage1 folder as read-only
+    read_only_input = os.path.abspath(output_dir) != os.path.abspath(input_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
     # ---- Merge mode: no GPU needed ----
     if args.merge:
-        _, all_frames, meta = merge_raw_mhr_parts(args.input, out_path=args.out)
-        _run_post_merge(args.input, all_frames, meta)
-        _rezip_input_dirs(args.input)
+        _, all_frames, meta = merge_raw_mhr_parts(output_dir, out_path=args.out)
+        _run_post_merge(output_dir, all_frames, meta)
+        if not read_only_input:
+            _rezip_input_dirs(input_dir)
         return
 
     is_partial = args.frame_start is not None or args.frame_end is not None
 
     t0 = time.time()
-    input_dir = args.input
-    image_dir = os.path.join(input_dir, "images")
-    masks_dir = os.path.join(input_dir, "masks")
 
-    # Auto-extract from zip archives
-    for d in (image_dir, masks_dir):
-        zip_p = d + ".zip"
-        if not os.path.isdir(d) and os.path.isfile(zip_p):
-            unzip_if_needed(zip_p, d)
+    # Auto-extract from zip archives (next to them, or to a temp dir for read-only inputs)
+    extract_root = make_extract_root("stage2_") if read_only_input else None
+    image_dir = resolve_archive_dir(os.path.join(input_dir, "images"), extract_root)
+    masks_dir = resolve_archive_dir(os.path.join(input_dir, "masks"), extract_root)
     if not os.path.isdir(image_dir) or not os.path.isdir(masks_dir):
         raise FileNotFoundError(f"Missing images/ or masks/ in: {input_dir}")
 
@@ -379,7 +389,7 @@ def main() -> None:
 
             centroid_data = compute_mask_centroids(masks_list, _to_actual)
             plot_mask_centroids(
-                centroid_data, os.path.join(input_dir, "mask_centroids.png"),
+                centroid_data, os.path.join(output_dir, "mask_centroids.png"),
                 title_prefix="Stage 1 Mask Centroids (real IDs)",
             )
         except Exception as e:
@@ -517,7 +527,7 @@ def main() -> None:
     if is_partial:
         # ---- Partial run: save part file only ----
         part_label = args.part_label or f"{fs_idx}_{fe_idx}"
-        parts_dir = os.path.join(input_dir, "raw_mhr_parts")
+        parts_dir = os.path.join(output_dir, "raw_mhr_parts")
         os.makedirs(parts_dir, exist_ok=True)
         part_path = args.out or os.path.join(parts_dir, f"raw_mhr_part_{part_label}.pt")
         payload = {
@@ -539,28 +549,29 @@ def main() -> None:
         print(f"[INFO] Saved partial raw params to: {part_path}")
 
         # Auto-merge when all expected parts are present
-        if all_parts_ready(input_dir):
+        if all_parts_ready(output_dir):
             print(f"\n[INFO] All {NUM_EXPECTED_PARTS} parts detected — auto-merging into raw_mhr.pt")
-            _, merged_frames, merged_meta = merge_raw_mhr_parts(input_dir)
-            _run_post_merge(input_dir, merged_frames, merged_meta)
-            _rezip_input_dirs(input_dir)
+            _, merged_frames, merged_meta = merge_raw_mhr_parts(output_dir)
+            _run_post_merge(output_dir, merged_frames, merged_meta)
+            if not read_only_input:
+                _rezip_input_dirs(input_dir)
         else:
-            n_found = len(discover_part_files(input_dir))
+            n_found = len(discover_part_files(output_dir))
             print(f"[INFO] {n_found}/{NUM_EXPECTED_PARTS} parts ready. "
                   f"Remaining parts will trigger auto-merge, or run with --merge manually.")
     else:
         # ---- Full run: save everything ----
         save_mesh_prediction_summary(
             frames, segment_id_mappings,
-            os.path.join(input_dir, "mesh_prediction_summary.json"),
+            os.path.join(output_dir, "mesh_prediction_summary.json"),
         )
         if segment_id_mappings:
             save_per_segment_raw_mhr(
-                frames, segment_id_mappings, input_dir,
+                frames, segment_id_mappings, input_dir, output_dir,
                 cfg_path, camera_intrinsics_path, float(args.camera_scale),
             )
 
-        out_path = args.out or os.path.join(input_dir, "raw_mhr.pt")
+        out_path = args.out or os.path.join(output_dir, "raw_mhr.pt")
         payload = {
             "frames": frames,
             "meta": {
@@ -575,12 +586,13 @@ def main() -> None:
         }
         save_raw_mhr(out_path, payload)
         print(f"[INFO] Saved combined raw params to: {out_path}")
-        _rezip_input_dirs(input_dir)
+        if not read_only_input:
+            _rezip_input_dirs(input_dir)
 
     mem = cuda_mem_snapshot()
     mem["wall_time_sec"] = float(time.time() - t0)
     mem_label = f"gpu_mem_stage2{'_part_' + (args.part_label or f'{fs_idx}_{fe_idx}') if is_partial else ''}.json"
-    write_json(os.path.join(input_dir, mem_label), mem)
+    write_json(os.path.join(output_dir, mem_label), mem)
     print(f"[INFO] Peak GPU memory (stage2): {mem}")
 
 if __name__ == "__main__":

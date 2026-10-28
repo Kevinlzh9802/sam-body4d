@@ -6,18 +6,28 @@
 # re-submit themselves via `self_submit` with the flags built here.
 
 # Builds SBATCH_FLAGS for <stage> on $CLUSTER.
+# Stages: stage1, stage2 (full sequence), stage2_part (one -part), stage2_merge, stage3.
+#
+# DAIC follows https://doc.daic.tudelft.nl/tutorials/slurm/: --account is
+# required, --partition=all, GPUs by full type name. The container's PyTorch
+# (2.7.1+cu118) supports A40/L40 but not the RTX Pro 6000 (Blackwell) nodes, so
+# an A40 (48 GB) is requested; override with -sbatch "--gres=gpu:nvidia_l40:1".
+# DAIC time/memory are estimates from DelftBlue runs of a cosilab batch
+# (960x540, 18000 frames, ~22 people/frame); check `seff <jobid>` and adjust.
 sbatch_flags() {
-  local stage="$1" time partition cpus mem_per_cpu
+  local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem
   case "$stage" in
-    stage1) time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M ;;
-    stage2) time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M ;;
-    stage3) time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M ;;
+    #             DelftBlue                                                     DAIC
+    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=""; daic_cpus=""; daic_mem="" ;;
+    stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=7-00:00:00; daic_cpus=4; daic_mem=32G ;;
+    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=3-00:00:00; daic_cpus=4; daic_mem=32G ;;
+    stage2_merge) time=2:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=2:00:00;    daic_cpus=2; daic_mem=32G ;;
+    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=250G ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 
   SBATCH_FLAGS=(
     --job-name="sb4d_${stage}_${DATASET}"
-    --time="$time"
     --ntasks=1
     --mail-type=END
     --output="$LOG_DIR/slurm_%j.out"
@@ -27,32 +37,43 @@ sbatch_flags() {
   if [ "$CLUSTER" = delftblue ]; then
     SBATCH_FLAGS+=(
       --account=research-eemcs-insy
+      --time="$time"
       --partition="$partition"
       --cpus-per-task="$cpus"
       --mem-per-cpu="$mem_per_cpu"
       --gpus-per-task=1
     )
   else
+    [ -n "$daic_time" ] || { echo "[ERROR] $stage has no DAIC resources" >&2; exit 2; }
+    local account
+    account="$(daic_account)" || exit 2
     SBATCH_FLAGS+=(
-      --partition=insy,general
-      --qos="$(daic_qos "$time")"
-      --cpus-per-task=8
-      --mem=64G
-      --gres=gpu:a40:1
+      --account="$account"
+      --time="$daic_time"
+      --partition=all
+      --cpus-per-task="$daic_cpus"
+      --mem="$daic_mem"
+      --gres=gpu:nvidia_a40:1
     )
   fi
 }
 
-# DAIC QoS from a H:MM:SS limit: short <=4h, medium <=36h, long otherwise.
-daic_qos() {
-  local hours="${1%%:*}"
-  if (( 10#$hours < 4 )) || [ "$1" = "4:00:00" ]; then
-    echo short
-  elif (( 10#$hours < 36 )) || [ "$1" = "36:00:00" ]; then
-    echo medium
-  else
-    echo long
+# DAIC billing account: $SB4D_ACCOUNT, else the first of the user's Slurm
+# associations (`sacctmgr show associations user=$USER`).
+daic_account() {
+  local account="${SB4D_ACCOUNT:-}"
+  if [ -z "$account" ] && command -v sacctmgr >/dev/null 2>&1; then
+    account="$(sacctmgr -n -P show associations user="$USER" format=Account 2>/dev/null | head -n1)"
   fi
+  if [ -z "$account" ]; then
+    if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
+      echo "<account>"
+      return 0
+    fi
+    echo "[ERROR] No DAIC account found; set SB4D_ACCOUNT=<account>" >&2
+    return 1
+  fi
+  echo "$account"
 }
 
 # On a login node: snapshot the code, submit <script> with <stage> flags and the

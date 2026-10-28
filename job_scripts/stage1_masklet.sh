@@ -2,8 +2,8 @@
 # Stage 1: SAM-3 masklets (stage1_masklet.py) -> <dataset>/bbox_kp/<seq>/
 #   images.zip, masks.zip, id_mapping.json, masklets_meta.json, video_mask.mp4, ...
 #
-# Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
-# snapshots the code and submits itself to SLURM.
+# Run with bash on a DelftBlue login node; the script snapshots the code and
+# submits itself to SLURM. Not implemented on DAIC.
 #
 # Usage:
 #   bash job_scripts/stage1_masklet.sh -cam 2 -b 1                 # cosilab cam02_batch01
@@ -50,6 +50,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$CAM_RES_SCALE" =~ ^[0-9]*\.?[0-9]+$ ]] || die "-cam_res_scale must be a positive number, got: $CAM_RES_SCALE"
+[ "$CLUSTER" != daic ] || die "NotImplementedError: Stage 1 is not implemented on DAIC. Run it on DelftBlue."
 
 load_dataset "$DATASET_ARG"
 resolve_seqs "$VIDEO_DIR"

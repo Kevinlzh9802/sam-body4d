@@ -52,7 +52,7 @@ from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
 from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
-from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
+from utils.zip_utils import cleanup_extracted_dir, make_extract_root, resolve_archive_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
 
@@ -204,17 +204,17 @@ def generate_reproj_overlays(
     out_dir: str,
     T: int,
     N: int,
+    input_dir: Optional[str] = None,
+    extract_root: Optional[str] = None,
 ) -> None:
-    """Generate reprojection overlay plots if images and intrinsics are available."""
-    input_dir = payload_meta.get("input_dir", "")
-    images_dir = os.path.join(input_dir, "images") if input_dir else ""
-    masks_dir = os.path.join(input_dir, "masks") if input_dir else ""
+    """Generate reprojection overlay plots if images and intrinsics are available.
 
-    for d in (images_dir, masks_dir):
-        if d:
-            z = d + ".zip"
-            if not os.path.isdir(d) and os.path.isfile(z):
-                unzip_if_needed(z, d)
+    Images/masks come from *input_dir* (default: ``payload_meta["input_dir"]``);
+    archives are extracted under *extract_root* if given (see resolve_archive_dir).
+    """
+    input_dir = input_dir or payload_meta.get("input_dir", "")
+    images_dir = resolve_archive_dir(os.path.join(input_dir, "images"), extract_root) if input_dir else ""
+    masks_dir = resolve_archive_dir(os.path.join(input_dir, "masks"), extract_root) if input_dir else ""
 
     has_images = images_dir and os.path.isdir(images_dir)
     has_intrinsics = bool(camera_intrinsics_json)
@@ -312,10 +312,17 @@ def main() -> None:
     parser.add_argument("--mhr-batch-size", type=int, default=256)
     parser.add_argument("--export-camera-space", action="store_true")
     parser.add_argument("--world-scale", type=float, default=100.0)
+    parser.add_argument("--input-dir", default=None,
+                        help="Stage1 folder with images(.zip)/masks(.zip). Only read: archives are "
+                             "extracted to a temp dir. Default: the --raw folder (extracted in place).")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
     os.makedirs(out_dir, exist_ok=True)
+
+    # Stage1 images/masks: a separate --input-dir is never written to
+    stage1_dir = args.input_dir or os.path.dirname(args.raw)
+    extract_root = make_extract_root("stage3_") if args.input_dir else None
     with open(os.path.join(out_dir, "stage3_run_options.txt"), "w", encoding="utf-8") as f:
         for k, v in vars(args).items():
             f.write(f"{k}: {v}\n")
@@ -326,7 +333,7 @@ def main() -> None:
         raise ValueError("Invalid raw payload: missing 'frames'.")
 
     meta = payload.get("meta", {})
-    segment_id_mappings = load_segment_id_mappings_from_meta(meta, fallback_dir=os.path.dirname(args.raw))
+    segment_id_mappings = load_segment_id_mappings_from_meta(meta, fallback_dir=stage1_dir)
     if segment_id_mappings:
         print(f"[INFO] Loaded {len(segment_id_mappings)} segment ID mapping(s)")
     else:
@@ -388,11 +395,7 @@ def main() -> None:
     enable_kps_reproj = args.enable_kps_reproj
     enable_ground = args.enable_ground
 
-    raw_parent = os.path.dirname(args.raw)
-    mask_dir = os.path.join(raw_parent, "masks")
-    mask_zip = mask_dir + ".zip"
-    if not os.path.isdir(mask_dir) and os.path.isfile(mask_zip):
-        unzip_if_needed(mask_zip, mask_dir)
+    mask_dir = resolve_archive_dir(os.path.join(stage1_dir, "masks"), extract_root)
     if enable_mask_reproj:
         if not os.path.isdir(mask_dir):
             print(f"[WARN] Mask directory not found: {mask_dir} — disabling mask reproj.")
@@ -556,15 +559,17 @@ def main() -> None:
         frame_obj_ids_slots=frame_obj_ids_slots,
         segment_id_mappings=segment_id_mappings,
         out_dir=out_dir, T=T, N=N,
+        input_dir=args.input_dir, extract_root=extract_root,
     )
 
-    # Clean up extracted dirs
-    cleanup_dirs = [mask_dir]
-    if overlay_result:
-        cleanup_dirs.extend(overlay_result)
-    for d in dict.fromkeys(cleanup_dirs):
-        if d:
-            cleanup_extracted_dir(d)
+    # Clean up dirs extracted in place (a temp extract_root is removed at exit)
+    if extract_root is None:
+        cleanup_dirs = [mask_dir]
+        if overlay_result:
+            cleanup_dirs.extend(overlay_result)
+        for d in dict.fromkeys(cleanup_dirs):
+            if d:
+                cleanup_extracted_dir(d)
 
 
 if __name__ == "__main__":

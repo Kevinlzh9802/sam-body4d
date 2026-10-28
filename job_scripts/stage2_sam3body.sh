@@ -1,8 +1,9 @@
 #!/bin/bash
-# Stage 2: SAM-3D-Body raw MHR params (stage2_sam3body.py) -> <dataset>/bbox_kp/<seq>/raw_mhr.pt
+# Stage 2: SAM-3D-Body raw MHR params (stage2_sam3body.py) -> $RAW_DIR/<seq>/raw_mhr.pt
 #
-# Needs Stage 1 output in bbox_kp/<seq>/ (images.zip, masks.zip, id_mapping.json)
-# and the sequence's intrinsics JSON.
+# Needs Stage 1 output in $STAGE1_DIR/<seq>/ (images.zip, masks.zip, id_mapping.json)
+# and the sequence's intrinsics JSON. Both dirs are <dataset>/bbox_kp/ except
+# cosilab on DAIC (see lib/dataset.sh), where the Stage 1 folder is only read.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
 # snapshots the code and submits itself to SLURM.
@@ -26,6 +27,8 @@
 #   -dataset <cosilab|conflab>   default: cosilab
 #   -cam <num> -b <spec> | -all <prefix> | <seq> ...   (see lib/common.sh)
 #   -part <p1|p2|p3|merge>       split run; needs exactly one sequence
+#   -batch_size <n>              frames per inference call (default: 16 on DelftBlue,
+#                                8 on DAIC: bs 16 peaks at ~56 GB, an A40 has 48 GB)
 #   -sbatch "<flags>"            extra sbatch flags, e.g. "--time=10:00:00" for a part
 set -euo pipefail
 
@@ -39,6 +42,7 @@ source "$SB4D_CODE/job_scripts/lib/common.sh"
 
 ORIG_ARGS=("$@")
 PART=""
+BATCH_SIZE=""
 # Must match NUM_EXPECTED_PARTS=3 in utils/merge_raw_mhr.py
 FRAMES_PER_PART=6000
 
@@ -48,6 +52,10 @@ while [[ $# -gt 0 ]]; do
       PART="${2:-}"
       shift 2
       ;;
+    -batch_size|--batch_size|--batch-size)
+      BATCH_SIZE="${2:-}"
+      shift 2
+      ;;
     *)
       parse_common_args "$@"
       shift "$COMMON_SHIFT"
@@ -55,6 +63,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [ -z "$BATCH_SIZE" ] && [ "$CLUSTER" = daic ]; then
+  BATCH_SIZE=8
+fi
+[ -z "$BATCH_SIZE" ] || [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || die "-batch_size must be a positive integer, got: $BATCH_SIZE"
+
+STAGE=stage2
 PART_ARGS=()
 case "$PART" in
   "")    ;;
@@ -64,16 +78,26 @@ case "$PART" in
   merge) PART_ARGS=(--merge) ;;
   *)     die "Unknown -part: $PART (use p1, p2, p3 or merge)" ;;
 esac
+case "$PART" in
+  "")    ;;
+  merge) STAGE=stage2_merge ;;
+  *)     STAGE=stage2_part ;;
+esac
+
+BATCH_ARGS=()
+[ -z "$BATCH_SIZE" ] || BATCH_ARGS=(--batch-size "$BATCH_SIZE")
 
 load_dataset "$DATASET_ARG"
-resolve_seqs "$BBOX_DIR"
+resolve_seqs "$STAGE1_DIR"
 if [ -n "$PART" ] && [ ${#SEQS[@]} -ne 1 ]; then
   die "-part needs exactly one sequence, got ${#SEQS[@]}: ${SEQS[*]}"
 fi
-self_submit stage2 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
-echo "[INFO] Sequences: ${SEQS[*]}  Part: ${PART:-full}"
+echo "[INFO] Sequences: ${SEQS[*]}  Part: ${PART:-full}  batch size: ${BATCH_SIZE:-default}"
+echo "[INFO] Stage 1 dir: $STAGE1_DIR"
+echo "[INFO] Output dir:  $RAW_DIR"
 echo ""
 
 total=${#SEQS[@]}
@@ -86,7 +110,7 @@ for seq in "${SEQS[@]}"; do
   echo "[INFO] [$idx/$total] Processing folder=$seq  part=${PART:-full}"
   echo "=================================================================="
 
-  folder="$BBOX_DIR/$seq"
+  folder="$STAGE1_DIR/$seq"
   if [ ! -d "$folder" ]; then
     echo "[ERROR] Folder does not exist: $folder" >&2
     failed=$((failed + 1))
@@ -102,14 +126,25 @@ for seq in "${SEQS[@]}"; do
     continue
   fi
 
+  # A separate output dir makes stage2_sam3body.py treat the input as read-only
+  OUTPUT_ARGS=()
+  out_folder="$RAW_DIR/$seq"
+  if [ "$out_folder" != "$folder" ]; then
+    [ "${SB4D_DRY_RUN:-0}" = 1 ] || mkdir -p "$out_folder"
+    OUTPUT_ARGS=(--output-dir "$(host_to_container "$out_folder")")
+  fi
+
   echo "[INFO] input=$folder"
+  echo "[INFO] output=$out_folder"
   echo "[INFO] intrinsics=$intrinsics"
 
   # No --out: raw_mhr.pt (full/merge) or raw_mhr_parts/raw_mhr_part_<label>.pt (parts)
   if run_in_container stage2_sam3body.py \
     --input "$(host_to_container "$folder")" \
+    ${OUTPUT_ARGS[@]+"${OUTPUT_ARGS[@]}"} \
     --intrinsic-path "$(host_to_container "$intrinsics")" \
     --config "$CONFIG" \
+    ${BATCH_ARGS[@]+"${BATCH_ARGS[@]}"} \
     ${PART_ARGS[@]+"${PART_ARGS[@]}"}; then
     echo "[INFO] [$idx/$total] folder=$seq completed successfully."
   else

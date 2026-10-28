@@ -15,25 +15,26 @@ from typing import Any, Dict, List, Optional, Tuple
 NUM_EXPECTED_PARTS = 3
 
 
-def discover_part_files(input_dir: str) -> List[str]:
-    """Return sorted list of ``raw_mhr_part_*.pt`` paths inside *input_dir*/raw_mhr_parts/."""
-    parts_dir = os.path.join(input_dir, "raw_mhr_parts")
+def discover_part_files(out_dir: str) -> List[str]:
+    """Return sorted list of ``raw_mhr_part_*.pt`` paths inside *out_dir*/raw_mhr_parts/."""
+    parts_dir = os.path.join(out_dir, "raw_mhr_parts")
     return sorted(glob.glob(os.path.join(parts_dir, "raw_mhr_part_*.pt")))
 
 
-def all_parts_ready(input_dir: str, n_expected: int = NUM_EXPECTED_PARTS) -> bool:
+def all_parts_ready(out_dir: str, n_expected: int = NUM_EXPECTED_PARTS) -> bool:
     """Check whether *n_expected* part files are present."""
-    return len(discover_part_files(input_dir)) >= n_expected
+    return len(discover_part_files(out_dir)) >= n_expected
 
 
 def merge_raw_mhr_parts(
-    input_dir: str,
+    out_dir: str,
     out_path: Optional[str] = None,
 ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
     """
-    Discover ``raw_mhr_part_*.pt`` in *input_dir*/raw_mhr_parts/, sort them
+    Discover ``raw_mhr_part_*.pt`` in *out_dir*/raw_mhr_parts/, sort them
     by frame name, concatenate the ``frames`` lists, and write the combined
-    ``raw_mhr.pt``.
+    ``raw_mhr.pt`` (default: *out_dir*/raw_mhr.pt).  ``id_mapping.json`` is
+    read from the Stage 1 folder recorded in the parts' ``meta.input_dir``.
 
     Returns ``(out_path, all_frames, meta)`` so the caller can run any
     post-merge diagnostics (summary JSON, per-segment files, etc.).
@@ -45,9 +46,9 @@ def merge_raw_mhr_parts(
     )
     from utils.id_mapping import load_segment_id_mappings
 
-    part_files = discover_part_files(input_dir)
+    part_files = discover_part_files(out_dir)
     if not part_files:
-        parts_dir = os.path.join(input_dir, "raw_mhr_parts")
+        parts_dir = os.path.join(out_dir, "raw_mhr_parts")
         raise FileNotFoundError(f"No raw_mhr_part_*.pt files found in {parts_dir}")
 
     print(f"[INFO] Merging {len(part_files)} part file(s)")
@@ -72,7 +73,10 @@ def merge_raw_mhr_parts(
     all_frames.sort(key=lambda f: int(f["frame"]))
     print(f"[INFO] Merged total: {len(all_frames)} frames, {total_corrupted} interpolated")
 
-    segment_id_mappings = load_segment_id_mappings(input_dir)
+    segment_id_mappings = (
+        load_segment_id_mappings(meta_base.get("input_dir") or out_dir)
+        or meta_base.get("segment_id_mappings", [])
+    )
 
     meta_base.update({
         "note": f"Merged from {len(part_files)} parts with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
@@ -82,7 +86,7 @@ def merge_raw_mhr_parts(
     })
 
     combined = {"frames": all_frames, "meta": meta_base}
-    out_path = out_path or os.path.join(input_dir, "raw_mhr.pt")
+    out_path = out_path or os.path.join(out_dir, "raw_mhr.pt")
     save_raw_mhr(out_path, combined)
     print(f"[INFO] Saved merged raw_mhr to: {out_path}")
 

@@ -1,9 +1,11 @@
 #!/bin/bash
-# Stage 3: smooth raw MHR params and export meshes -> <dataset>/bbox_kp/<seq>/meshes_4d_individual/
+# Stage 3: smooth raw MHR params and export meshes -> $SMOOTH_DIR/<seq>/meshes_4d_individual/
 #
-# Needs bbox_kp/<seq>/raw_mhr.pt and masks.zip (Stage 1/2), the sequence's
-# intrinsics JSON and, if available, its extrinsics JSON (required for conflab;
-# without it cosilab exports in camera space and skips ground optimization).
+# Needs $RAW_DIR/<seq>/raw_mhr.pt (Stage 2), $STAGE1_DIR/<seq>/masks.zip and
+# images.zip (Stage 1), the sequence's intrinsics JSON and, if available, its
+# extrinsics JSON (required for conflab; without it cosilab exports in camera
+# space and skips ground optimization). All three dirs are <dataset>/bbox_kp/
+# except cosilab on DAIC (see lib/dataset.sh), where the Stage 1 folder is only read.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
 # snapshots the code and submits itself to SLURM.
@@ -51,12 +53,15 @@ done
 STAGE3_SCRIPT="stage3_mhr_${MODE}.py"
 
 load_dataset "$DATASET_ARG"
-resolve_seqs "$BBOX_DIR"
+resolve_seqs "$RAW_DIR"
 self_submit stage3 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
 echo "[INFO] Sequences: ${SEQS[*]}"
 echo "[INFO] Stage 3 mode: $MODE ($STAGE3_SCRIPT)"
+echo "[INFO] Stage 1 dir: $STAGE1_DIR"
+echo "[INFO] Raw dir:     $RAW_DIR"
+echo "[INFO] Output dir:  $SMOOTH_DIR"
 echo ""
 
 total=${#SEQS[@]}
@@ -69,7 +74,7 @@ for seq in "${SEQS[@]}"; do
   echo "[INFO] [$idx/$total] Processing folder=$seq"
   echo "=================================================================="
 
-  raw="$BBOX_DIR/$seq/raw_mhr.pt"
+  raw="$RAW_DIR/$seq/raw_mhr.pt"
   if [ ! -f "$raw" ]; then
     echo "[WARN] raw_mhr.pt not found: $raw. Skipping." >&2
     failed=$((failed + 1))
@@ -99,7 +104,17 @@ for seq in "${SEQS[@]}"; do
     echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export, no ground opt"
   fi
 
+  # Separate Stage 1 / output folders (default: next to raw_mhr.pt)
+  DIR_ARGS=()
+  if [ "$STAGE1_DIR" != "$RAW_DIR" ]; then
+    DIR_ARGS+=(--input-dir "$(host_to_container "$STAGE1_DIR/$seq")")
+  fi
+  if [ "$SMOOTH_DIR" != "$RAW_DIR" ]; then
+    DIR_ARGS+=(--out "$(host_to_container "$SMOOTH_DIR/$seq")")
+  fi
+
   echo "[INFO] raw=$raw"
+  echo "[INFO] output=$SMOOTH_DIR/$seq"
   echo "[INFO] camera-intrinsics-json=$intrinsics"
 
   if [ "$MODE" = simple ]; then
@@ -111,6 +126,7 @@ for seq in "${SEQS[@]}"; do
   if run_in_container "$STAGE3_SCRIPT" \
     --raw "$(host_to_container "$raw")" \
     --camera-intrinsics-json "$(host_to_container "$intrinsics")" \
+    ${DIR_ARGS[@]+"${DIR_ARGS[@]}"} \
     ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} \
     ${EXTRINSICS_ARGS[@]+"${EXTRINSICS_ARGS[@]}"}; then
     echo "[INFO] [$idx/$total] folder=$seq completed successfully."

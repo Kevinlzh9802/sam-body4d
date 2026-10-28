@@ -107,6 +107,37 @@ def unzip_if_needed(
     return target_dir
 
 
+def resolve_archive_dir(dir_path: str, extract_root: Optional[str] = None) -> str:
+    """
+    Return a directory with the contents of *dir_path*, extracting
+    ``<dir_path>.zip`` when the directory does not exist.
+
+    By default the archive is extracted next to itself (into *dir_path*).  With
+    *extract_root* it is extracted to ``<extract_root>/<basename>`` instead, so
+    the archive's folder is never written to (read-only inputs).
+
+    Returns *dir_path* unchanged when neither the directory nor the archive exists.
+    """
+    if os.path.isdir(dir_path):
+        return dir_path
+    zip_path = dir_path + ".zip"
+    if not os.path.isfile(zip_path):
+        return dir_path
+    target = os.path.join(extract_root, os.path.basename(dir_path)) if extract_root else dir_path
+    return unzip_if_needed(zip_path, target)
+
+
+def make_extract_root(prefix: str) -> str:
+    """Create a temp dir (under $TMPDIR) for :func:`resolve_archive_dir`; removed at exit."""
+    import atexit
+    import tempfile
+
+    root = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    print(f"[zip_utils] Extracting archives to temp dir: {root}")
+    return root
+
+
 def cleanup_extracted_dir(dir_path: str, zip_path: Optional[str] = None) -> None:
     """
     Remove *dir_path* only when the corresponding zip archive already exists

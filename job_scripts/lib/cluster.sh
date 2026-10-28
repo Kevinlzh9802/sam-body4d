@@ -3,7 +3,8 @@
 #
 # DelftBlue is detected by the presence of /scratch/zli33; anything else is DAIC.
 # Override with SB4D_CLUSTER=delftblue|daic, and the dataset base dir with
-# SB4D_DATA_BASE (e.g. for dry runs against a local copy).
+# SB4D_DATA_BASE (e.g. for dry runs against a local copy). On DAIC, cosilab
+# Stage 2/3 folders live under SB4D_COSILAB_PROJECT (see lib/dataset.sh).
 #
 # Container mount points are identical on both clusters so paths stored in
 # outputs (e.g. raw_mhr.pt meta.input_dir) stay valid across clusters:
@@ -36,6 +37,7 @@ case "$CLUSTER" in
     MODEL_HOST=$NEON_HOST/models/sam4d_checkpoints
     SIF_PATH=$NEON_HOST/apptainer/body4d_osmesa.sif
     LOG_DIR=$HOME_HOST/slurm_outputs/sam_4d_body
+    COSILAB_PROJECT_HOST="${SB4D_COSILAB_PROJECT:-$NEON_HOST/cosilab_project}"
     ;;
   *)
     echo "[ERROR] Unknown cluster: $CLUSTER (expected delftblue or daic)" >&2

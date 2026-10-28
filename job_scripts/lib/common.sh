@@ -145,27 +145,43 @@ make_snapshot() {
   fi
 }
 
+# Sets BINDS to the container mounts (host:container[:ro]).
+container_binds() {
+  BINDS=(
+    "$DATA_ROOT:$BIND_DATA"
+    "$MODEL_HOST:$BIND_MODEL"
+    "$HOME_HOST:$BIND_HOME"
+    ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}
+  )
+}
+
 # Maps a host path to its path inside the container (unchanged if not mounted).
 host_to_container() {
-  local p="$1"
-  case "$p" in
-    "$DATA_ROOT"|"$DATA_ROOT"/*)   echo "$BIND_DATA${p#"$DATA_ROOT"}" ;;
-    "$MODEL_HOST"|"$MODEL_HOST"/*) echo "$BIND_MODEL${p#"$MODEL_HOST"}" ;;
-    "$HOME_HOST"|"$HOME_HOST"/*)   echo "$BIND_HOME${p#"$HOME_HOST"}" ;;
-    *)                             echo "$p" ;;
-  esac
+  local p="$1" b src dst
+  container_binds
+  for b in "${BINDS[@]}"; do
+    src="${b%%:*}"
+    dst="${b#*:}"
+    dst="${dst%%:*}"
+    case "$p" in
+      "$src"|"$src"/*) echo "$dst${p#"$src"}"; return 0 ;;
+    esac
+  done
+  echo "$p"
 }
 
 # Runs <script.py> from the code dir inside the apptainer image.
 run_in_container() {
   local script="$1"
   shift
-  local project
+  local project b
   project="$(host_to_container "$SB4D_CODE")"
-  local cmd=(apptainer exec --nv
-    --bind "$MODEL_HOST:$BIND_MODEL"
-    --bind "$DATA_ROOT:$BIND_DATA"
-    --bind "$HOME_HOST:$BIND_HOME"
+  container_binds
+  local cmd=(apptainer exec --nv)
+  for b in "${BINDS[@]}"; do
+    cmd+=(--bind "$b")
+  done
+  cmd+=(
     --env "PYTHONPATH=$project/models/sam3:$project:${PYTHONPATH:-}"
     --env PYOPENGL_PLATFORM=osmesa
     "$SIF_PATH"

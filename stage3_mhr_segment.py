@@ -60,7 +60,7 @@ from utils.id_mapping import load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
 from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
-from utils.zip_utils import unzip_if_needed, cleanup_extracted_dir
+from utils.zip_utils import cleanup_extracted_dir, make_extract_root, resolve_archive_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
 
 from stage3_mhr_full import (
@@ -119,7 +119,8 @@ def process_one_segment(
     cfg_path: str,
     device: torch.device,
     args,
-    raw_parent: str,
+    stage1_dir: str,
+    extract_root: Optional[str],
     out_dir: str,
     seg_idx: int,
 ) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
@@ -179,10 +180,7 @@ def process_one_segment(
     enable_mask_reproj = not args.no_mask_reproj
     enable_ground = args.enable_ground
 
-    mask_dir = os.path.join(raw_parent, "masks")
-    mask_zip = mask_dir + ".zip"
-    if not os.path.isdir(mask_dir) and os.path.isfile(mask_zip):
-        unzip_if_needed(mask_zip, mask_dir)
+    mask_dir = resolve_archive_dir(os.path.join(stage1_dir, "masks"), extract_root)
     if enable_mask_reproj:
         if not os.path.isdir(mask_dir):
             print(f"[WARN] Mask directory not found: {mask_dir} — disabling mask reproj.")
@@ -464,10 +462,17 @@ def main() -> None:
     parser.add_argument("--mhr-batch-size", type=int, default=256)
     parser.add_argument("--export-camera-space", action="store_true")
     parser.add_argument("--world-scale", type=float, default=100.0)
+    parser.add_argument("--input-dir", default=None,
+                        help="Stage1 folder with images(.zip)/masks(.zip). Only read: archives are "
+                             "extracted to a temp dir. Default: the --raw folder (extracted in place).")
     args = parser.parse_args()
 
     out_dir = args.out or os.path.dirname(args.raw)
     os.makedirs(out_dir, exist_ok=True)
+
+    # Stage1 images/masks: a separate --input-dir is never written to
+    stage1_dir = args.input_dir or os.path.dirname(args.raw)
+    extract_root = make_extract_root("stage3_") if args.input_dir else None
     with open(os.path.join(out_dir, "stage3_per_segment_options.txt"), "w") as f:
         for k, v in vars(args).items():
             f.write(f"{k}: {v}\n")
@@ -476,7 +481,7 @@ def main() -> None:
     payload = load_raw_mhr(args.raw, map_location="cpu")
     frames = payload["frames"]
     meta = payload.get("meta", {})
-    segment_id_mappings = load_segment_id_mappings_from_meta(meta, fallback_dir=os.path.dirname(args.raw))
+    segment_id_mappings = load_segment_id_mappings_from_meta(meta, fallback_dir=stage1_dir)
 
     if not segment_id_mappings:
         print("[ERROR] No segment_id_mappings found. This script requires per-segment "
@@ -511,8 +516,6 @@ def main() -> None:
     print(f"[INFO] Building SAM-3D-Body model on {device}")
     estimator = build_sam3d_body_from_config(cfg, device=device)
 
-    raw_parent = os.path.dirname(args.raw)
-
     # Process each segment
     all_segment_results: List[Dict[int, Dict[str, Any]]] = []
     all_segment_tensors: List[Optional[Dict[str, Any]]] = []
@@ -524,7 +527,8 @@ def main() -> None:
             cfg_path=cfg_path,
             device=device,
             args=args,
-            raw_parent=raw_parent,
+            stage1_dir=stage1_dir,
+            extract_root=extract_root,
             out_dir=out_dir,
             seg_idx=seg_idx,
         )
@@ -665,10 +669,11 @@ def main() -> None:
             frame_obj_ids_slots=frame_obj_ids_all,
             segment_id_mappings=segment_id_mappings,
             out_dir=out_dir, T=T_all, N=N_all,
+            input_dir=args.input_dir, extract_root=extract_root,
         )
 
-        # Clean up extracted dirs
-        if overlay_result:
+        # Clean up dirs extracted in place (a temp extract_root is removed at exit)
+        if overlay_result and extract_root is None:
             for d in dict.fromkeys(overlay_result):
                 if d:
                     cleanup_extracted_dir(d)
