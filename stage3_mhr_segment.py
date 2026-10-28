@@ -4,7 +4,8 @@ Stage 3 — per-segment variant.
 
 Splits raw_mhr.pt by segment boundaries, runs the full Stage 3 pipeline
 (Option 1 smoothing + mask reproj + ground constraint) on each segment
-independently, then concatenates the per-person NPZ mesh outputs.
+independently, then reassembles the segments into one sequence and exports
+per-person NPZ meshes.
 
 This avoids cross-segment discontinuity issues that arise when the
 smoothers treat the concatenated multi-segment sequence as one
@@ -123,16 +124,13 @@ def process_one_segment(
     extract_root: Optional[str],
     out_dir: str,
     seg_idx: int,
-) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
+) -> Optional[Dict[str, Any]]:
     """
     Run full Stage 3 on one segment's frames.
 
-    Returns:
-        mesh_results: obj_id -> {"vertices": (T_vis, V, 3), "faces": (F, 3),
-                                  "frame_names": list[str]}
-        tensor_data:  dict with post-optimization tensors on CPU for combined
-                      plotting (j3d, pred_cam_t, verts, faces_np, frame_names,
-                      obj_ids_all, frame_obj_ids_slots, T, N).
+    Returns a dict with the post-optimization tensors on CPU (j3d, pred_cam_t,
+    verts, faces_np, frame_names, obj_ids_all, frame_obj_ids_slots, T, N), used
+    for mesh export and combined plotting, or None for an empty segment.
     """
     seg_key = seg_info.get("segment_key", f"seg{seg_idx}")
     fs = int(seg_info["frame_start"])
@@ -150,7 +148,7 @@ def process_one_segment(
 
     if T == 0 or N == 0:
         print(f"[WARN] Empty segment {seg_key}, skipping")
-        return {}, None
+        return None
 
     # Option 1 smoothing
     if not args.no_option1:
@@ -244,30 +242,7 @@ def process_one_segment(
         with open(seg_summary_path, "w", encoding="utf-8") as f:
             json.dump(opt_summary, f, indent=2)
 
-    # Build per-person mesh data (camera-space, pre-extrinsics transform)
-    pred_cam_t_tn = pred_cam_t.view(T, N, 3) if pred_cam_t.dim() == 2 else pred_cam_t
-
-    results: Dict[int, Dict[str, Any]] = {}
-    for si, oid in enumerate(obj_ids_all):
-        verts_list = []
-        names_list = []
-        for ti in range(T):
-            if frame_obj_ids_slots[ti][si] != oid:
-                continue
-            bi = ti * N + si
-            v = verts[bi].detach().float().numpy()
-            camt = pred_cam_t_tn[ti, si].detach().float().cpu().numpy()
-            v_cam = v + camt
-            verts_list.append(v_cam)
-            names_list.append(frame_names[ti])
-        if verts_list:
-            results[oid] = {
-                "vertices": np.stack(verts_list, axis=0).astype(np.float32),
-                "frame_names": names_list,
-                "faces": faces_np,
-            }
-
-    # Move tensors to CPU for combined plotting; free GPU copies
+    # Move tensors to CPU for mesh export and combined plotting; free GPU copies
     seg_tensor_data = {
         "j3d": j3d.detach().cpu(),
         "pred_cam_t": pred_cam_t.detach().cpu() if isinstance(pred_cam_t, torch.Tensor) else pred_cam_t,
@@ -284,65 +259,7 @@ def process_one_segment(
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    return results, seg_tensor_data
-
-
-# ---------------------------------------------------------------------------
-# Concatenation and export
-# ---------------------------------------------------------------------------
-
-def concatenate_and_export(
-    all_segment_results: List[Dict[int, Dict[str, Any]]],
-    extr,
-    world_scale: float,
-    export_world: bool,
-    mesh_dir: str,
-):
-    """Concatenate per-segment per-person meshes and save final NPZ files."""
-    os.makedirs(mesh_dir, exist_ok=True)
-
-    Rt_np = t_np = None
-    if extr is not None and export_world:
-        Rt_np = extr.R.transpose(0, 1).cpu().numpy()
-        t_np = extr.t.cpu().numpy().reshape(1, 3)
-
-    # Gather all person IDs
-    all_oids = set()
-    for seg_results in all_segment_results:
-        all_oids.update(seg_results.keys())
-
-    faces_np = None
-    for oid in sorted(all_oids):
-        verts_parts = []
-        names_parts = []
-        for seg_results in all_segment_results:
-            if oid not in seg_results:
-                continue
-            data = seg_results[oid]
-            v_cam = data["vertices"]
-            if faces_np is None:
-                faces_np = data["faces"]
-            if Rt_np is not None:
-                mesh_verts = (v_cam * world_scale - t_np) @ Rt_np
-            else:
-                mesh_verts = v_cam
-            verts_parts.append(mesh_verts)
-            names_parts.extend(data["frame_names"])
-
-        if not verts_parts:
-            continue
-        verts_stacked = np.concatenate(verts_parts, axis=0).astype(np.float32)
-        npz_path = os.path.join(mesh_dir, f"{oid}.npz")
-        np.savez_compressed(
-            npz_path,
-            vertices=verts_stacked,
-            faces=faces_np,
-            frame_names=np.array(names_parts),
-        )
-        print(f"[INFO] Saved {oid}.npz: {verts_stacked.shape[0]} frames, "
-              f"{verts_stacked.shape[1]} verts")
-
-    print(f"[INFO] Exported per-person NPZ archives to: {mesh_dir}")
+    return seg_tensor_data
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +267,16 @@ def concatenate_and_export(
 # ---------------------------------------------------------------------------
 
 def reassemble_full_sequence(
-    all_segment_data: List[Dict[str, Any]],
+    all_segment_data: List[Optional[Dict[str, Any]]],
 ) -> Dict[str, Any]:
     """
     Merge per-segment post-optimization tensors into a single (T_total, N_all)
-    tensor layout suitable for the plotting functions (feet_z, ground_plane,
-    reproj_overlay) that expect full-sequence inputs.
+    tensor layout for mesh export and the plotting functions (feet_z,
+    ground_plane, reproj_overlay) that expect full-sequence inputs.
+
+    Each segment's vertices are released as soon as they are copied (popped
+    from its dict), so the full vertex tensor never coexists with all segment
+    copies; absent (frame, person) slots stay zero.
     """
     non_empty = [sd for sd in all_segment_data if sd is not None]
     if not non_empty:
@@ -372,12 +293,16 @@ def reassemble_full_sequence(
     J = first["j3d"].shape[1]
     V = first["verts"].shape[1]
     faces_np = first["faces_np"]
+    T_total = sum(sd["T"] for sd in non_empty)
 
-    all_j3d, all_pct, all_verts = [], [], []
+    full_j3d = torch.zeros(T_total, N_all, J, 3)
+    full_pct = torch.zeros(T_total, N_all, 3)
+    # torch.empty: memory is committed block by block as segments are written below
+    full_verts = torch.empty(T_total, N_all, V, 3)
     all_frame_names: List[str] = []
     all_frame_obj_ids: List[List[int]] = []
-    T_total = 0
 
+    t_off = 0
     for sd in non_empty:
         T_seg, N_seg = sd["T"], sd["N"]
         seg_oids = sd["obj_ids_all"]
@@ -387,11 +312,8 @@ def reassemble_full_sequence(
         seg_pct = sd["pred_cam_t"]
         if seg_pct.dim() == 2:
             seg_pct = seg_pct.view(T_seg, N_seg, 3)
-        seg_verts = sd["verts"].view(T_seg, N_seg, V, 3)
-
-        full_j3d = torch.zeros(T_seg, N_all, J, 3)
-        full_pct = torch.zeros(T_seg, N_all, 3)
-        full_verts = torch.zeros(T_seg, N_all, V, 3)
+        seg_verts = sd.pop("verts").view(T_seg, N_seg, V, 3)
+        full_verts[t_off:t_off + T_seg].zero_()
 
         for ti in range(T_seg):
             global_ids = [0] * N_all
@@ -399,21 +321,19 @@ def reassemble_full_sequence(
                 gi = oid_to_slot[oid]
                 if seg_slots[ti][si_local] == oid:
                     global_ids[gi] = oid
-                    full_j3d[ti, gi] = seg_j3d[ti, si_local]
-                    full_pct[ti, gi] = seg_pct[ti, si_local]
-                    full_verts[ti, gi] = seg_verts[ti, si_local]
+                    full_j3d[t_off + ti, gi] = seg_j3d[ti, si_local]
+                    full_pct[t_off + ti, gi] = seg_pct[ti, si_local]
+                    full_verts[t_off + ti, gi] = seg_verts[ti, si_local]
             all_frame_obj_ids.append(global_ids)
 
         all_frame_names.extend(sd["frame_names"])
-        all_j3d.append(full_j3d.reshape(T_seg * N_all, J, 3))
-        all_pct.append(full_pct.reshape(T_seg * N_all, 3))
-        all_verts.append(full_verts.reshape(T_seg * N_all, V, 3))
-        T_total += T_seg
+        t_off += T_seg
+        del seg_verts
 
     return {
-        "j3d": torch.cat(all_j3d, dim=0),
-        "pred_cam_t": torch.cat(all_pct, dim=0),
-        "verts": torch.cat(all_verts, dim=0),
+        "j3d": full_j3d.view(T_total * N_all, J, 3),
+        "pred_cam_t": full_pct.view(T_total * N_all, 3),
+        "verts": full_verts.view(T_total * N_all, V, 3),
         "faces_np": faces_np,
         "frame_names": all_frame_names,
         "obj_ids_all": obj_ids_all,
@@ -517,10 +437,9 @@ def main() -> None:
     estimator = build_sam3d_body_from_config(cfg, device=device)
 
     # Process each segment
-    all_segment_results: List[Dict[int, Dict[str, Any]]] = []
     all_segment_tensors: List[Optional[Dict[str, Any]]] = []
     for seg_idx, (seg_info, seg_frames) in enumerate(segment_splits):
-        seg_results, seg_tensors = process_one_segment(
+        seg_tensors = process_one_segment(
             seg_info=seg_info,
             seg_frames=seg_frames,
             estimator=estimator,
@@ -532,7 +451,6 @@ def main() -> None:
             out_dir=out_dir,
             seg_idx=seg_idx,
         )
-        all_segment_results.append(seg_results)
         all_segment_tensors.append(seg_tensors)
 
     # Release model
@@ -555,25 +473,15 @@ def main() -> None:
     if not export_world:
         print("[INFO] Exporting meshes in CAMERA coordinates")
 
-    # Concatenate and export meshes
-    mesh_dir = os.path.join(out_dir, "meshes_4d_individual")
-    concatenate_and_export(
-        all_segment_results=all_segment_results,
-        extr=extr,
-        world_scale=float(args.world_scale),
-        export_world=export_world,
-        mesh_dir=mesh_dir,
-    )
-
     # ------------------------------------------------------------------
-    # Combined plots (feet_z, ground plane, reproj overlay)
+    # Reassemble segments, export meshes, combined plots
     # ------------------------------------------------------------------
     combined = reassemble_full_sequence(all_segment_tensors)
     del all_segment_tensors
     gc.collect()
 
     if not combined:
-        print("[WARN] No segment data to plot")
+        print("[WARN] No segment data to export or plot")
     else:
         T_all = combined["T"]
         N_all = combined["N"]
@@ -586,6 +494,16 @@ def main() -> None:
         frame_obj_ids_all = combined["frame_obj_ids_slots"]
 
         world_scale = float(args.world_scale)
+
+        # Per-person meshes (camera-space verts + post-opt pred_cam_t, then extrinsics)
+        export_per_person_meshes(
+            verts=verts_all, pred_cam_t=pred_cam_t_all,
+            obj_ids_all=obj_ids_all_combined, frame_obj_ids_slots=frame_obj_ids_all,
+            frame_names=frame_names_all, faces_np=faces_np, extr=extr,
+            world_scale=world_scale,
+            mesh_dir=os.path.join(out_dir, "meshes_4d_individual"),
+            T=T_all, N=N_all,
+        )
 
         # Mesh height plot
         if extr is not None:

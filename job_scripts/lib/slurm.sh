@@ -12,8 +12,9 @@
 # full type name. Stage 2 uses an RTX Pro 6000 (96 GB, Blackwell), which needs
 # the CUDA 12.8 image (SIF_PATH_CU128, selected in stage2_sam3body.sh). Stage 3
 # stays on an A40 (48 GB) with the cu118 image. Override the GPU with e.g.
-# -sbatch "--gres=gpu:nvidia_l40:1". Memory is estimated from DelftBlue runs of
-# a cosilab batch (960x540, 18000 frames); check `seff <jobid>` and adjust.
+# -sbatch "--gres=gpu:nvidia_l40:1". Memory is estimated for a cosilab batch
+# (960x540, 18000 frames, 23 people): stage 3 keeps one T*N x 18439 x 3 float32
+# vertex tensor (~92 GB) in RAM. Check `seff <jobid>` and adjust.
 # Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb.
 sbatch_flags() {
   local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem daic_gpu
@@ -23,7 +24,7 @@ sbatch_flags() {
     stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=3-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=1-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_merge) time=2:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=2:00:00;    daic_cpus=2; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=250G; daic_gpu=nvidia_a40 ;;
+    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=128G; daic_gpu=nvidia_a40 ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 

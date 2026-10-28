@@ -236,7 +236,9 @@ def run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N):
     face = _face if _face is not None else torch.zeros((T * N, 72), dtype=torch.float32, device=device)
 
     total = T * N
-    verts_list, j3d_list = [], []
+    # Preallocated CPU vertex tensor (no list + torch.cat copy); y/z flipped per batch
+    verts = None
+    j3d_list = []
     for bs in tqdm(range(0, total, batch_size), desc="MHR forward"):
         be = min(bs + batch_size, total)
         out = head_pose.mhr_forward(
@@ -246,17 +248,19 @@ def run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N):
             expr_params=face[bs:be], return_keypoints=True,
             return_joint_coords=False, return_model_params=False, return_joint_rotations=False,
         )
-        verts_list.append(out[0].cpu())
+        batch_verts = out[0].detach()
+        batch_verts[..., 1:3] *= -1
+        if verts is None:
+            verts = torch.empty((total,) + tuple(batch_verts.shape[1:]), dtype=batch_verts.dtype)
+        verts[bs:be].copy_(batch_verts)
         j3d_list.append(out[1].cpu())
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    verts = torch.cat(verts_list, dim=0)
     j3d = torch.cat(j3d_list, dim=0)
-    del verts_list, j3d_list
+    del j3d_list
     if j3d.shape[1] > 70:
         j3d = j3d[:, :70].contiguous()
-    verts[..., [1, 2]] *= -1
     j3d[..., [1, 2]] *= -1
     faces_np = np.asarray(estimator.faces, dtype=np.int32)
     return verts, j3d, faces_np
@@ -276,10 +280,12 @@ def export_per_person_meshes(verts, pred_cam_t, obj_ids_all, frame_obj_ids_slots
 
     for oid in obj_ids_all:
         si = list(obj_ids_all).index(oid)
-        vl, nl = [], []
-        for ti in range(T):
-            if frame_obj_ids_slots[ti][si] != oid:
-                continue
+        frames_oid = [ti for ti in range(T) if frame_obj_ids_slots[ti][si] == oid]
+        if not frames_oid:
+            continue
+        nl = [frame_names[ti] for ti in frames_oid]
+        vs = np.empty((len(frames_oid),) + tuple(verts.shape[1:]), dtype=np.float32)
+        for k, ti in enumerate(frames_oid):
             bi = ti * N + si
             v = verts[bi].detach().float().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
@@ -288,11 +294,7 @@ def export_per_person_meshes(verts, pred_cam_t, obj_ids_all, frame_obj_ids_slots
                 v_world = (v_cam * world_scale - t_np) @ Rt_np
             else:
                 v_world = v_cam
-            vl.append(v_world)
-            nl.append(frame_names[ti])
-        if not vl:
-            continue
-        vs = np.stack(vl, axis=0).astype(np.float32)
+            vs[k] = v_world
         npz_path = os.path.join(mesh_dir, f"{oid}.npz")
         np.savez_compressed(npz_path, vertices=vs, faces=faces_np, frame_names=np.array(nl))
         print(f"[INFO] {oid}.npz: {vs.shape[0]} frames, {vs.shape[1]} verts")

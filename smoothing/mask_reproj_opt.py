@@ -53,9 +53,10 @@ def load_masks_for_sequence(
         if not os.path.exists(mask_path):
             continue
         
-        # Load as palette image to get obj_ids
+        # Load as palette image to get obj_ids. Palette indices are 0-255, so uint8
+        # is exact and a quarter of int32 (all frames are kept on the device).
         mask_img = Image.open(mask_path).convert('P')
-        mask_np = np.array(mask_img, dtype=np.int32)
+        mask_np = np.array(mask_img, dtype=np.uint8)
         masks[ti] = torch.from_numpy(mask_np).to(device)
     
     return masks

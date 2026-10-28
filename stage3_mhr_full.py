@@ -85,7 +85,10 @@ def run_batched_mhr_forward(
     total_samples = T * N
     print(f"[INFO] Running MHR forward in batches: {total_samples} samples, batch_size={batch_size}")
 
-    verts_list, j3d_list = [], []
+    # Vertices dominate memory (T*N x 18439 x 3 float32), so they are written into
+    # one preallocated CPU tensor instead of a list + torch.cat (which needs 2x).
+    verts: Optional[torch.Tensor] = None
+    j3d_list = []
     num_batches = (total_samples + batch_size - 1) // batch_size
     for bs in tqdm(range(0, total_samples, batch_size), total=num_batches, desc="MHR forward"):
         be = min(bs + batch_size, total_samples)
@@ -106,14 +109,19 @@ def run_batched_mhr_forward(
             batch_verts, batch_j3d = mhr_out[0], mhr_out[1]
         else:
             raise ValueError(f"Unexpected mhr_forward output: {type(mhr_out)}")
-        verts_list.append(batch_verts.cpu())
+        # Camera system difference (flip y, z), done per batch on the device so the
+        # full CPU tensor is never copied
+        batch_verts = batch_verts.detach()
+        batch_verts[..., 1:3] *= -1
+        if verts is None:
+            verts = torch.empty((total_samples,) + tuple(batch_verts.shape[1:]), dtype=batch_verts.dtype)
+        verts[bs:be].copy_(batch_verts)
         j3d_list.append(batch_j3d.cpu())
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    verts = torch.cat(verts_list, dim=0)
     j3d = torch.cat(j3d_list, dim=0).to(device)
-    del verts_list, j3d_list
+    del j3d_list
     if device.type == "cuda":
         torch.cuda.empty_cache()
     print(f"[INFO] MHR forward complete: verts shape={verts.shape} (CPU), j3d shape={j3d.shape} ({j3d.device})")
@@ -121,8 +129,7 @@ def run_batched_mhr_forward(
     if j3d.shape[1] > 70:
         j3d = j3d[:, :70].contiguous()
 
-    # Camera system difference
-    verts[..., [1, 2]] *= -1
+    # Camera system difference (verts already flipped above)
     j3d[..., [1, 2]] *= -1
 
     faces_np = np.asarray(estimator.faces, dtype=np.int32)
@@ -158,11 +165,13 @@ def export_per_person_meshes(
 
     for oid in obj_ids_all:
         si = list(obj_ids_all).index(oid)
-        verts_list_oid: List[np.ndarray] = []
-        names_list_oid: List[str] = []
-        for ti in range(T):
-            if frame_obj_ids_slots[ti][si] != oid:
-                continue
+        frames_oid = [ti for ti in range(T) if frame_obj_ids_slots[ti][si] == oid]
+        if not frames_oid:
+            continue
+        names_list_oid = [frame_names[ti] for ti in frames_oid]
+        # Filled in place: one (frames, V, 3) array per person, no list + stack copy
+        verts_stacked = np.empty((len(frames_oid),) + tuple(verts.shape[1:]), dtype=np.float32)
+        for k, ti in enumerate(frames_oid):
             bi = ti * N + si
             v = verts[bi].detach().float().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
@@ -171,12 +180,7 @@ def export_per_person_meshes(
                 mesh_vertices = (v_cam * world_scale - t_np) @ Rt_np
             else:
                 mesh_vertices = v_cam
-            verts_list_oid.append(mesh_vertices)
-            names_list_oid.append(frame_names[ti])
-
-        if not verts_list_oid:
-            continue
-        verts_stacked = np.stack(verts_list_oid, axis=0).astype(np.float32)
+            verts_stacked[k] = mesh_vertices
         npz_path = os.path.join(mesh_dir, f"{oid}.npz")
         np.savez_compressed(npz_path, vertices=verts_stacked, faces=faces_np, frame_names=np.array(names_list_oid))
         print(f"[INFO] Saved {oid}.npz: {verts_stacked.shape[0]} frames, "
