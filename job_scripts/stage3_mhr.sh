@@ -1,5 +1,6 @@
 #!/bin/bash
-# Stage 3: smooth raw MHR params and export meshes -> $SMOOTH_DIR/<seq>/meshes_4d_individual/
+# Stage 3: smooth raw MHR params and export meshes -> $SMOOTH_DIR/<seq>/<mode>/meshes_4d_individual/
+# (<mode> is full, segment or simple).
 #
 # Needs $RAW_DIR/<seq>/raw_mhr.pt (Stage 2), $STAGE1_DIR/<seq>/masks.zip and
 # images.zip (Stage 1), the sequence's intrinsics JSON and, if available, its
@@ -61,7 +62,7 @@ echo "[INFO] Sequences: ${SEQS[*]}"
 echo "[INFO] Stage 3 mode: $MODE ($STAGE3_SCRIPT)"
 echo "[INFO] Stage 1 dir: $STAGE1_DIR"
 echo "[INFO] Raw dir:     $RAW_DIR"
-echo "[INFO] Output dir:  $SMOOTH_DIR"
+echo "[INFO] Output dir:  $SMOOTH_DIR/<seq>/$MODE"
 echo ""
 
 total=${#SEQS[@]}
@@ -104,17 +105,15 @@ for seq in "${SEQS[@]}"; do
     echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export, no ground opt"
   fi
 
-  # Separate Stage 1 / output folders (default: next to raw_mhr.pt)
-  DIR_ARGS=()
+  # One output folder per mode, so modes don't overwrite each other
+  out_dir="$SMOOTH_DIR/$seq/$MODE"
+  DIR_ARGS=(--out "$(host_to_container "$out_dir")")
   if [ "$STAGE1_DIR" != "$RAW_DIR" ]; then
     DIR_ARGS+=(--input-dir "$(host_to_container "$STAGE1_DIR/$seq")")
   fi
-  if [ "$SMOOTH_DIR" != "$RAW_DIR" ]; then
-    DIR_ARGS+=(--out "$(host_to_container "$SMOOTH_DIR/$seq")")
-  fi
 
   echo "[INFO] raw=$raw"
-  echo "[INFO] output=$SMOOTH_DIR/$seq"
+  echo "[INFO] output=$out_dir"
   echo "[INFO] camera-intrinsics-json=$intrinsics"
 
   if [ "$MODE" = simple ]; then
