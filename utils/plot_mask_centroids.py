@@ -27,7 +27,7 @@ def compute_mask_centroids(
     Scan all mask PNGs and compute per-person centroid for each frame.
 
     Args:
-        masks_list: sorted list of mask PNG paths (index = frame index).
+        masks_list: sorted list of mask PNG paths named by frame index (e.g. 00001800.png).
         to_actual_pid: callable(consecutive_id, frame_idx) -> actual_pid.
 
     Returns:
@@ -35,7 +35,8 @@ def compute_mask_centroids(
     """
     data: Dict[int, Dict[str, list]] = defaultdict(lambda: {"frames": [], "cx": [], "cy": []})
 
-    for frame_idx, mask_path in enumerate(tqdm(masks_list, desc="Mask centroids")):
+    for mask_path in tqdm(masks_list, desc="Mask centroids"):
+        frame_idx = int(os.path.splitext(os.path.basename(mask_path))[0])
         if os.path.getsize(mask_path) == 0:
             continue
         mask = np.array(Image.open(mask_path))

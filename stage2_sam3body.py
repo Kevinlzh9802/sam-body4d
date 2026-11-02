@@ -354,8 +354,15 @@ def main() -> None:
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
     masks_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(masks_dir, ext))])
-    n_total = min(len(images_list), len(masks_list))
-    images_list, masks_list = images_list[:n_total], masks_list[:n_total]
+    # Pair by frame name: Stage 1 writes masks for every frame but no images for
+    # skipped (unannotated) segments, so the two lists can start at different frames.
+    mask_by_name = {Path(p).stem: p for p in masks_list}
+    n_images = len(images_list)
+    images_list = [p for p in images_list if Path(p).stem in mask_by_name]
+    masks_list = [mask_by_name[Path(p).stem] for p in images_list]
+    n_total = len(images_list)
+    if n_total < n_images:
+        print(f"[WARN] {n_images - n_total} image(s) have no mask with the same frame name; skipped.")
     if n_total == 0:
         raise FileNotFoundError("Found no images or masks to process.")
 
