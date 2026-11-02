@@ -44,6 +44,9 @@ case "$CLUSTER" in
     SIF_PATH_CU128=$NEON_HOST/apptainer/body4d_osmesa_cu128.sif
     LOG_DIR=/home/zli33/linuxhome/slurm_outputs/sam_4d_body
     COSILAB_PROJECT_HOST="${SB4D_COSILAB_PROJECT:-$NEON_HOST/cosilab_project}"
+    # /home/zli33 is ~5 MB (config files only), so the container gets a job-local
+    # home on the node's /tmp for matplotlib/torch/CUDA caches (removed at exit).
+    CONTAINER_HOME_HOST="${TMPDIR:-/tmp/$USER}/sb4d_home_${SLURM_JOB_ID:-$$}"
     ;;
   *)
     echo "[ERROR] Unknown cluster: $CLUSTER (expected delftblue or daic)" >&2

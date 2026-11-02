@@ -159,10 +159,20 @@ run_in_container() {
   shift
   local project="$BIND_CODE" b
   container_binds
-  local cmd=(apptainer exec --nv)
+  local cmd=(apptainer exec --nv --pwd "$project")
   for b in "${BINDS[@]}"; do
     cmd+=(--bind "$b")
   done
+  if [ -n "${CONTAINER_HOME_HOST:-}" ]; then
+    local home=/home/sb4d v
+    cmd+=(--home "$CONTAINER_HOME_HOST:$home")
+    # Overrides cache dirs exported on the host (e.g. by ~/.daicrc), which aren't mounted
+    for v in XDG_CACHE_HOME=.cache XDG_CONFIG_HOME=.config XDG_DATA_HOME=.local/share \
+             XDG_STATE_HOME=.local/state MPLCONFIGDIR=.config/matplotlib TORCH_HOME=.cache/torch \
+             HF_HOME=.cache/huggingface TRITON_CACHE_DIR=.cache/triton CUDA_CACHE_PATH=.cache/nv; do
+      cmd+=(--env "${v%%=*}=$home/${v#*=}")
+    done
+  fi
   cmd+=(
     --env "PYTHONPATH=$project/models/sam3:$project:${PYTHONPATH:-}"
     --env PYOPENGL_PLATFORM=osmesa
@@ -171,6 +181,10 @@ run_in_container() {
   if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
     echo "[DRY-RUN] $(printf '%q ' "${cmd[@]}")"
     return 0
+  fi
+  if [ -n "${CONTAINER_HOME_HOST:-}" ] && [ ! -d "$CONTAINER_HOME_HOST" ]; then
+    mkdir -p "$CONTAINER_HOME_HOST"
+    trap 'rm -rf "$CONTAINER_HOME_HOST"' EXIT
   fi
   "${cmd[@]}"
 }
