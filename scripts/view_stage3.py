@@ -8,8 +8,9 @@ placed with the rig's multi-camera calibration (libCalib JSON
 parameters-camera-AA-to-BB.json, poses relative to camera AA), which is also
 used to draw the camera frustums. Without a floor calibration the scene is
 levelled from the people themselves: "up" is the mean body axis, and the floor
-sits under the lowest vertices. World-space outputs (stage 3 with
---extrinsics-json) are shown in metres as exported.
+is at the median foot height. World-space outputs (Stage 3 with
+--extrinsics-json, the default then) are shown as exported (floor z=0), with
+the cameras from experiments/extrinsics/extrinsic_cam_<MM>.json.
 
 Only numpy and viser are needed (no torch / container). The vertices are read
 straight from the npz stream, so --frames limits memory on full sequences:
@@ -81,6 +82,21 @@ def _rodrigues(rvec: np.ndarray) -> np.ndarray:
     k = rvec / theta
     Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
     return np.eye(3) + np.sin(theta) * Kx + (1 - np.cos(theta)) * Kx @ Kx
+
+
+def world_cameras(rig: List[Camera], calib_dir: str, world_scale: float) -> List[Camera]:
+    """The rig's cameras posed in the world frame, from extrinsic_cam_<MM>.json
+    (world_to_camera, as scripts/make_ground_extrinsics.py writes them)."""
+    out = []
+    for cam in rig:
+        path = os.path.join(calib_dir, f"extrinsic_{cam.name.replace('cam', 'cam_')}.json")
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        out.append(Camera(cam.name, np.asarray(d["rotation"], dtype=np.float64).reshape(3, 3),
+                          np.asarray(d["translation"], dtype=np.float64).reshape(3) / world_scale, cam.f, cam.size))
+    return out
 
 
 def find_rig_calibration(calib_dir: str, cam_num: int) -> Optional[str]:
@@ -236,13 +252,16 @@ def main() -> None:
     people: List[Person] = []
     rig: Optional[List[Camera]] = None
     rig_path = None
+    world_rig: Optional[List[Camera]] = None
     shown_cams = set()
+    spaces = set()
     for out_dir in args.out_dirs:
         opts = read_run_options(out_dir)
         cam_num = camera_number(out_dir, opts)
         cam_name = f"cam{cam_num:02d}" if cam_num is not None else os.path.basename(os.path.normpath(out_dir))
         camera_space = opts.get("export_camera_space", "True") == "True" or opts.get("extrinsics_json") in (None, "None")
         to_rig, scale = None, 1.0
+        spaces.add("camera" if camera_space else "world")
         if camera_space:
             path = args.calib or (find_rig_calibration(args.calib_dir, cam_num) if cam_num is not None else None)
             if path:
@@ -256,6 +275,10 @@ def main() -> None:
             shown_cams.add(cam_name)
         else:
             scale = float(opts.get("world_scale", 100.0))
+            path = args.calib or (find_rig_calibration(args.calib_dir, cam_num) if cam_num is not None else None)
+            if path and world_rig is None:
+                world_rig = world_cameras(load_rig_calibration(path), args.calib_dir, scale)
+            shown_cams.add(cam_name)
         loaded = load_people(out_dir, args.frames, args.stride, set(args.ids or []), to_rig, scale, cam_name)
         n_frames = sum(len(p.frames) for p in loaded)
         print(f"[INFO] {out_dir}: {len(loaded)} people, {n_frames} person-frames "
@@ -264,17 +287,24 @@ def main() -> None:
     if not people:
         raise SystemExit("[ERROR] No meshes found (check the dirs, --frames and --ids).")
 
-    A, b = (np.eye(3), np.zeros(3)) if args.no_level else level_scene(people)
+    if len(spaces) > 1:
+        raise SystemExit("[ERROR] Mix of camera-space and world-space outputs; show them separately.")
+    world = spaces == {"world"}
+    # World outputs already have the floor at z=0 and z up
+    level = not args.no_level and not world
+    A, b = level_scene(people) if level else (np.eye(3), np.zeros(3))
+    if world:
+        rig = world_rig
     for p in people:
         p.verts = p.verts @ A.T.astype(np.float32) + b.astype(np.float32)
     timeline = np.unique(np.concatenate([p.frames for p in people]))
     row_of = [{int(f): i for i, f in enumerate(p.frames)} for p in people]
 
     server = viser.ViserServer(host=args.host, port=args.port)
-    server.scene.set_up_direction("+z" if not args.no_level else "-y")
+    server.scene.set_up_direction("+z" if level or world else "-y")
     allv = np.concatenate([p.verts[::10, ::50].reshape(-1, 3) for p in people])
     lo, hi = allv.min(0), allv.max(0)
-    if not args.no_level:
+    if level or world:
         size = float(np.ceil(max(hi[0] - lo[0], hi[1] - lo[1]) + 4))
         cx, cy = float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2)
         server.scene.add_grid("/floor", width=size, height=size, plane="xy", cell_size=0.5,
@@ -302,7 +332,7 @@ def main() -> None:
         labels.append(server.scene.add_label(f"/labels/{i}", p.label, position=tuple(p.verts[0].mean(0)),
                                              visible=False))
         centre = p.verts[:, ::25].mean(1)
-        if not args.no_level:
+        if level or world:
             centre[:, 2] = 0.02  # on the floor
         gaps = np.diff(p.frames) > args.stride  # no line across frames the person is missing
         seg = np.stack([centre[:-1], centre[1:]], 1)[~gaps]
