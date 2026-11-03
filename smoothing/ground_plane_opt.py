@@ -123,6 +123,13 @@ class GroundOptConfig:
     # If True (default), always push the lowest foot to ground (assumes humans are always standing)
     # If False, only apply ground constraint when contact is detected
     always_grounded: bool = True
+    # "ray": per person a constant scale about the camera centre + per frame a
+    # small shift along the viewing ray (optimize_ground_ray_scale); keeps the
+    # mesh where it is in the image. "translate": free 3D translation
+    # (optimize_ground_plane_translation); moves people sideways in the image.
+    mode: str = "ray"
+    huber_delta: float = 10.0  # ray mode: Huber plane loss (world units), so frames with no foot down weigh less
+    ray_lr: float = 0.01  # ray mode: Adam lr for log(scale) and the per-frame ray factor
 
 
 FOOT_IDXS = (13, 14, 15, 16, 17, 18, 19, 20)  # ankles + toes + heels in mhr70
@@ -252,3 +259,100 @@ def optimize_ground_plane_translation(
         }
     return t_opt, metrics
 
+
+
+def optimize_ground_ray_scale(
+    *,
+    extr: Extrinsics,
+    X3d: torch.Tensor,      # (T,70,3) local keypoints (before translation)
+    t0: torch.Tensor,       # (T,3) pred_cam_t
+    present: torch.Tensor,  # (T,) bool, frames where this person exists
+    cfg: GroundOptConfig,
+) -> Tuple[torch.Tensor, float, Dict[str, float]]:
+    """
+    Ground constraint that keeps the person where they are in the image.
+
+    Camera-space body: x = s * (X_local + (1 + k_t) * t0_t)
+      s    one scale per person about the camera centre. Scaling a camera-space
+           mesh about the camera centre leaves its projection unchanged: this is
+           the depth/size ambiguity a single view cannot resolve, and the floor
+           resolves it.
+      k_t  small per-frame shift along the viewing ray (changes the apparent
+           size by k_t, not the position), for per-frame floor contact.
+    Losses: lowest foot point on z=0 (Huber), prior + velocity + acceleration
+    on the ray shift, over consecutive present frames only.
+
+    Returns pred_cam_t (T,3) (= s (1 + k) t0 on present frames, t0 elsewhere),
+    s (the caller must multiply the person's local vertices/keypoints by it)
+    and metrics.
+    """
+    import torch.nn.functional as F
+
+    device = X3d.device
+    ws = float(cfg.world_scale)
+    t_out = t0.detach().to(device=device, dtype=torch.float32).clone()
+    idx = torch.nonzero(present.to(device), as_tuple=False).view(-1)
+    if len(idx) == 0:
+        return t_out, 1.0, {"skipped": True}
+
+    feet = X3d[idx][:, list(FOOT_IDXS), :].float()  # (P,8,3)
+    tp = t_out[idx]                                  # (P,3)
+    pair = (idx[1:] - idx[:-1]) == 1                 # consecutive present frames
+    trip = pair[1:] & pair[:-1]
+    # World z of a camera point x: (x - t) @ R[:, 2]
+    up = extr.R[:, 2].float()
+    z_off = float(extr.t.float().view(3) @ up)
+    ray_len = tp.norm(dim=1) * ws                    # (P,) camera-to-root distance, world units
+
+    def feet_z(log_s: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+        cam = log_s.exp() * (feet + (1.0 + k)[:, None, None] * tp[:, None, :])
+        return (cam * ws) @ up - z_off               # (P,8)
+
+    # Start from the median per-frame scale that puts the lowest foot on the floor
+    with torch.no_grad():
+        a = ((feet + tp[:, None, :]) * ws @ up).min(dim=1).values  # lowest foot z at s=1 is a - z_off
+        s_t = z_off / a
+        s_t = s_t[torch.isfinite(s_t) & (s_t > 0)]
+        s0 = float(s_t.median().clamp(0.5, 2.0)) if len(s_t) else 1.0
+
+    log_s = torch.tensor(float(np.log(s0)), device=device, requires_grad=True)
+    k = torch.zeros(len(idx), device=device, requires_grad=True)
+    opt = torch.optim.Adam([log_s, k], lr=float(cfg.ray_lr))
+    zero = torch.zeros((), device=device)
+
+    for _ in range(int(cfg.iters)):
+        opt.zero_grad(set_to_none=True)
+        min_z = feet_z(log_s, k).min(dim=1).values
+        l_plane = F.huber_loss(min_z, torch.zeros_like(min_z), delta=float(cfg.huber_delta))
+        d = k * log_s.exp() * ray_len                # shift along the ray, world units
+        l_prior = (d * d).mean()
+        l_vel = ((d[1:] - d[:-1])[pair] ** 2).mean() if bool(pair.any()) else zero
+        l_accel = ((d[2:] - 2.0 * d[1:-1] + d[:-2])[trip] ** 2).mean() if bool(trip.any()) else zero
+        loss = (
+            float(cfg.lambda_plane) * l_plane
+            + float(cfg.lambda_prior) * l_prior
+            + float(cfg.lambda_vel) * l_vel
+            + float(cfg.lambda_accel) * l_accel
+        )
+        loss.backward()
+        opt.step()
+
+    with torch.no_grad():
+        s = float(log_s.exp())
+        t_out[idx] = s * (1.0 + k)[:, None] * tp
+        min_z = feet_z(log_s, k).min(dim=1).values
+        d = k * s * ray_len
+        metrics = {
+            "mode": "ray",
+            "scale": s,
+            "scale_init": s0,
+            "min_foot_z_mean": float(min_z.mean()),
+            "min_foot_z_std": float(min_z.std()) if len(min_z) > 1 else 0.0,
+            "ray_shift_rms": float(d.pow(2).mean().sqrt()),
+            "loss_plane": float(l_plane),
+            "loss_prior": float(l_prior),
+            "loss_vel": float(l_vel),
+            "loss_accel": float(l_accel),
+            "total_frames": int(len(idx)),
+        }
+    return t_out, s, metrics

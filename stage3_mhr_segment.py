@@ -218,7 +218,7 @@ def process_one_segment(
             reproj_cfg=ReprojOptConfig(),
             extrinsics_json=args.extrinsics_json,
             ground_cfg=GroundOptConfig(
-                iters=int(args.ground_iters), lr=float(args.ground_lr),
+                mode=args.ground_mode, iters=int(args.ground_iters), lr=float(args.ground_lr),
                 lambda_plane=float(args.ground_lambda_plane),
                 lambda_slide=float(args.ground_lambda_slide),
                 lambda_prior=float(args.ground_lambda_prior),
@@ -233,7 +233,7 @@ def process_one_segment(
             cfg=cfg3, device=device, mhr=mhr, frame_names=frame_names,
             obj_ids_all=obj_ids_all, frame_obj_ids_slots=frame_obj_ids_slots,
             vis_flags=vis_flags, keypoints3d_local=j3d,
-            vertices_local=verts if enable_mask_reproj else None,
+            vertices_local=verts,
             segment_id_mappings=seg_mapping_for_opt,
         )
         pred_cam_t = mhr["pred_cam_t"]
@@ -370,6 +370,9 @@ def main() -> None:
     parser.add_argument("--camera-intrinsics-json", default=None)
     parser.add_argument("--camera-scale", type=float, default=0.5)
     parser.add_argument("--extrinsics-json", default=None)
+    parser.add_argument("--ground-mode", choices=["ray", "translate"], default="ray",
+                        help="ray: scale each person about the camera centre + shift along the "
+                             "viewing ray (keeps the image alignment); translate: free 3D shift")
     parser.add_argument("--ground-iters", type=int, default=200)
     parser.add_argument("--ground-lr", type=float, default=0.05)
     parser.add_argument("--ground-lambda-plane", type=float, default=5.0)

@@ -10,7 +10,9 @@ from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, ema_smooth_globa
 
 from .obs_kps import ObsKps, build_obj_id_to_bbox_idx, get_obs_for_person, load_bboxes_kps_pkl
 from .reproj_opt import ReprojOptConfig, optimize_pred_cam_t
-from .ground_plane_opt import GroundOptConfig, load_extrinsics_json, optimize_ground_plane_translation
+from .ground_plane_opt import (
+    GroundOptConfig, load_extrinsics_json, optimize_ground_plane_translation, optimize_ground_ray_scale,
+)
 from .mask_reproj_opt import MaskReprojOptConfig, load_masks_for_sequence, optimize_mask_reprojection
 
 
@@ -153,16 +155,19 @@ def run_stage3_post_optimizations(
     vis_flags: Dict[int, List[int]],
     # required for recompute/projection
     keypoints3d_local: torch.Tensor,  # (T*N, 70, 3) after mhr_forward camera-axis flips, BEFORE adding pred_cam_t
-    vertices_local: Optional[torch.Tensor] = None,  # (T*N, V, 3) mesh vertices (for mask reproj)
+    vertices_local: Optional[torch.Tensor] = None,  # (T*N, V, 3) mesh vertices (mask reproj, ground mode "ray")
     segment_id_mappings: Optional[List[Dict[str, Any]]] = None,  # per-segment actual->consecutive mapping
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
     """
     Apply optional post-optimizations on top of base Option1 smoothing.
-    Currently both optimizers adjust pred_cam_t only, and they are NOT mutually exclusive.
+    They adjust pred_cam_t, and they are NOT mutually exclusive.
     They can be applied sequentially:
       - mask reprojection (if enabled, default ON)
       - legacy keypoint reprojection (if enabled)
-      - ground-plane/contact (if enabled)
+      - ground-plane/contact (if enabled). Mode "ray" also scales each person
+        about the camera centre: it multiplies vertices_local and
+        keypoints3d_local IN PLACE, so the caller's tensors stay consistent
+        with the returned pred_cam_t.
     """
     summary: Dict[str, Any] = {"mask_reproj": {}, "kps_reproj": {}, "ground": {}}
     T = len(frame_names)
@@ -294,6 +299,9 @@ def run_stage3_post_optimizations(
         K_body = min(K_kps, 70)
         X3d = X3d_full[:, :, :K_body, :].contiguous()
 
+        ray_mode = cfg.ground_cfg.mode == "ray"
+        if ray_mode and vertices_local is None:
+            raise ValueError("vertices_local is required for ground mode 'ray' (the meshes are rescaled).")
         for si, oid in enumerate(obj_ids_all):
             present = torch.tensor([1 if frame_obj_ids_slots[t][si] == oid else 0 for t in range(T)], device=device)
             if int(present.sum().item()) == 0:
@@ -301,7 +309,14 @@ def run_stage3_post_optimizations(
 
             t0 = pred_cam_t[:, si, :]
             X = X3d[:, si, :, :]
-            t_opt, metrics = optimize_ground_plane_translation(extr=extr, X3d=X, t0=t0, cfg=cfg.ground_cfg)
+            if ray_mode:
+                t_opt, s, metrics = optimize_ground_ray_scale(
+                    extr=extr, X3d=X, t0=t0, present=present.bool(), cfg=cfg.ground_cfg)
+                # The person is scaled about the camera centre: local mesh and keypoints too (in place)
+                vertices_local.view(T, N, *vertices_local.shape[1:])[:, si].mul_(s)
+                keypoints3d_local.view(T, N, *keypoints3d_local.shape[1:])[:, si].mul_(s)
+            else:
+                t_opt, metrics = optimize_ground_plane_translation(extr=extr, X3d=X, t0=t0, cfg=cfg.ground_cfg)
             pred_cam_t[:, si, :] = t_opt
             summary["ground"][str(oid)] = metrics
 

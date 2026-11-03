@@ -304,6 +304,9 @@ def main() -> None:
     parser.add_argument("--obs-scale-cands", nargs="*", type=float, default=[1.0, 0.5, 2.0])
     # Ground inputs
     parser.add_argument("--extrinsics-json", default=None)
+    parser.add_argument("--ground-mode", choices=["ray", "translate"], default="ray",
+                        help="ray: scale each person about the camera centre + shift along the "
+                             "viewing ray (keeps the image alignment); translate: free 3D shift")
     parser.add_argument("--ground-iters", type=int, default=200)
     parser.add_argument("--ground-lr", type=float, default=0.05)
     parser.add_argument("--ground-lambda-plane", type=float, default=5.0)
@@ -438,7 +441,7 @@ def main() -> None:
             ),
             extrinsics_json=args.extrinsics_json,
             ground_cfg=GroundOptConfig(
-                iters=int(args.ground_iters), lr=float(args.ground_lr),
+                mode=args.ground_mode, iters=int(args.ground_iters), lr=float(args.ground_lr),
                 lambda_plane=float(args.ground_lambda_plane),
                 lambda_slide=float(args.ground_lambda_slide),
                 lambda_prior=float(args.ground_lambda_prior),
@@ -453,7 +456,7 @@ def main() -> None:
             cfg=cfg3, device=device, mhr=mhr, frame_names=frame_names,
             obj_ids_all=obj_ids_all, frame_obj_ids_slots=frame_obj_ids_slots,
             vis_flags=vis_flags, keypoints3d_local=j3d,
-            vertices_local=verts if enable_mask_reproj else None,
+            vertices_local=verts,
             segment_id_mappings=segment_id_mappings,
         )
         pred_cam_t = mhr["pred_cam_t"]
