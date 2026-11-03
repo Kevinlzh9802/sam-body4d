@@ -51,7 +51,7 @@ from smoothing.feet_z_plot import plot_feet_z_from_stage3, plot_body_landmarks_z
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.extract_mesh_ground_info import run_extract_ground_info
-from utils.id_mapping import load_segment_id_mappings_from_meta
+from utils.id_mapping import consecutive_to_actual_per_frame, load_segment_id_mappings_from_meta
 from utils.model_factory import build_sam3d_body_from_config
 from utils.plot_ground_info import run_plot_ground_info
 from utils.plot_mesh_heights import plot_mesh_heights_from_stage3
@@ -73,14 +73,10 @@ def compute_mask_centroids(
     Returns ``{actual_pid: {frame_idx: (cx, cy)}}``.
     """
     # Build per-frame consecutive→actual mapping
-    T = len(frame_names)
-    c2a_per_frame: List[Dict[int, int]] = [{} for _ in range(T)]
     if segment_id_mappings:
-        for seg in segment_id_mappings:
-            c2a = {int(k): int(v) for k, v in seg["consecutive_to_actual"].items()}
-            fs, fe = int(seg["frame_start"]), int(seg["frame_end"])
-            for t in range(max(0, fs), min(T, fe + 1)):
-                c2a_per_frame[t] = c2a
+        c2a_per_frame = consecutive_to_actual_per_frame(frame_names, segment_id_mappings)
+    else:
+        c2a_per_frame = [{} for _ in frame_names]
 
     centroids: Dict[int, Dict[int, Tuple[float, float]]] = {}
     for ti, fname in enumerate(tqdm(frame_names, desc="Mask centroids")):

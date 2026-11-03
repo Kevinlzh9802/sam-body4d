@@ -126,3 +126,21 @@ def actual_to_consecutive(
             if int(aid) == int(actual_pid):
                 return int(cid)
     return None
+
+
+def consecutive_to_actual_per_frame(
+    frame_names: List[str],
+    segment_id_mappings: List[SegmentMapping],
+) -> List[Dict[int, int]]:
+    """Consecutive -> actual ID mapping for each entry of *frame_names*.
+
+    Segment ``frame_start``/``frame_end`` are frame numbers (the frame name),
+    not positions in *frame_names*, which may start later (unannotated
+    segments have no images) or be a slice of the sequence.
+    Frames outside every segment get an empty dict.
+    """
+    out: List[Dict[int, int]] = []
+    for name in frame_names:
+        seg = find_segment_for_frame(int(name), segment_id_mappings)
+        out.append({int(k): int(v) for k, v in seg["consecutive_to_actual"].items()} if seg else {})
+    return out

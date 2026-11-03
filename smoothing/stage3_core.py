@@ -38,6 +38,7 @@ class Stage3Config:
 
 # Re-export from canonical location for backward compatibility
 from utils.camera_utils import read_camera_intrinsics, read_camera_intrinsics_new, adjust_K
+from utils.id_mapping import consecutive_to_actual_per_frame
 
 def stack_frames_to_tensors(
     frames: List[Dict[str, Any]],
@@ -193,15 +194,13 @@ def run_stage3_post_optimizations(
         # Build per-frame actual->consecutive reverse mapping for mask pixel lookup.
         # Masks store consecutive IDs (1,2,3...) while obj_ids_all has actual PIDs.
         # segment_id_mappings[i] = {frame_start, frame_end, consecutive_to_actual: {consec->actual}}
-        # We invert to actual->consecutive per frame.
+        # We invert to actual->consecutive per frame (segments are looked up by frame name).
         actual_to_consec_per_frame: Optional[List[Dict[int, int]]] = None
         if segment_id_mappings:
-            actual_to_consec_per_frame = [{} for _ in range(T)]
-            for seg in segment_id_mappings:
-                inv = {int(v): int(k) for k, v in seg["consecutive_to_actual"].items()}
-                fs, fe = int(seg["frame_start"]), int(seg["frame_end"])
-                for t in range(max(0, fs), min(T, fe + 1)):
-                    actual_to_consec_per_frame[t] = inv
+            actual_to_consec_per_frame = [
+                {a: c for c, a in c2a.items()}
+                for c2a in consecutive_to_actual_per_frame(frame_names, segment_id_mappings)
+            ]
 
         for si, oid in enumerate(obj_ids_all):
             present = torch.tensor([1 if frame_obj_ids_slots[t][si] == oid else 0 for t in range(T)], device=device)
