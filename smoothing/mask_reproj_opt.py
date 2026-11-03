@@ -126,6 +126,60 @@ def _sample_soft_mask(
     return sampled.reshape(-1)
 
 
+def _build_soft_mask_counts(
+    masks: List[torch.Tensor],
+    target_ids: List[int],
+    blur_radius: int = 5,
+    chunk: int = 64,
+) -> torch.Tensor:
+    """
+    Batched _build_soft_mask, stored compactly: (F, H, W) uint8 counts of
+    target pixels in each (2r+1)^2 box. Divided by (2r+1)^2 this is exactly
+    the soft mask, at a quarter of float32's memory.
+    """
+    ks = 2 * blur_radius + 1
+    assert ks * ks <= 255, "blur_radius too large for uint8 counts"
+    H, W = masks[0].shape
+    device = masks[0].device
+    out = torch.empty(len(masks), H, W, dtype=torch.uint8, device=device)
+    kernel = torch.ones(1, 1, ks, ks, device=device)
+    for s in range(0, len(masks), chunk):
+        ids = torch.tensor(target_ids[s:s + chunk], device=device).view(-1, 1, 1)
+        binary = (torch.stack(masks[s:s + chunk]) == ids).float().unsqueeze(1)
+        counts = F.conv2d(binary, kernel, padding=blur_radius) if blur_radius > 0 else binary
+        out[s:s + chunk] = counts.squeeze(1).round().to(torch.uint8)
+    return out
+
+
+def _sample_soft_masks_batched(
+    counts: torch.Tensor,     # (F, H, W) uint8 from _build_soft_mask_counts
+    divisor: float,           # (2r+1)^2
+    points_2d: torch.Tensor,  # (F, P, 2) pixel coordinates (x, y)
+) -> torch.Tensor:
+    """
+    Bilinear sampling of frame f's soft mask at points_2d[f], the same as
+    _sample_soft_mask (grid_sample, align_corners=True, zero padding).
+    Gathers only the 4 neighbours of each point, so no float copy of the
+    masks is made; gradients flow through the bilinear weights.
+    Returns (F, P).
+    """
+    n_f, H, W = counts.shape
+    flat = counts.reshape(-1)
+    x, y = points_2d[..., 0], points_2d[..., 1]
+    x0, y0 = x.detach().floor(), y.detach().floor()
+    wx1, wy1 = x - x0, y - y0
+    x0, y0 = x0.long(), y0.long()
+    base = (torch.arange(n_f, device=counts.device) * (H * W)).view(-1, 1)
+    out = torch.zeros_like(x)
+    for dx, dy, w in ((0, 0, (1 - wx1) * (1 - wy1)), (1, 0, wx1 * (1 - wy1)),
+                      (0, 1, (1 - wx1) * wy1), (1, 1, wx1 * wy1)):
+        xi, yi = x0 + dx, y0 + dy
+        inside = (xi >= 0) & (xi < W) & (yi >= 0) & (yi < H)
+        idx = base + yi.clamp(0, H - 1) * W + xi.clamp(0, W - 1)
+        out = out + w * flat[idx].to(x.dtype) * inside
+    return out / divisor
+
+
 def sample_mask_at_points(
     mask: torch.Tensor,
     points_2d: torch.Tensor,
@@ -207,22 +261,33 @@ def optimize_mask_reprojection(
         print(f"[WARN] No valid masks found for obj_id={obj_id}, skipping optimization")
         return t0, {"skipped": True}
     
-    # Pre-build soft masks (blurred float masks for differentiable sampling)
-    soft_masks: Dict[int, torch.Tensor] = {}
-    for ti in valid_frames:
-        target_id = mask_ids[ti] if mask_ids is not None else obj_id
-        soft_masks[ti] = _build_soft_mask(masks[ti], target_id, blur_radius=5)
+    # All frames are handled at once: per iteration the loss is a few batched
+    # ops over (frames, sampled vertices) instead of a Python loop over frames.
+    target_ids = [mask_ids[ti] if mask_ids is not None else obj_id for ti in valid_frames]
+    fidx = torch.tensor(valid_frames, device=device)
+    verts_v = verts_sampled[fidx]  # (F, P, 3)
+
+    # Soft masks (blurred, for differentiable sampling) as uint8 box counts
+    blur_radius = 5
+    soft_div = float((2 * blur_radius + 1) ** 2)
+    soft_counts = _build_soft_mask_counts([masks[ti] for ti in valid_frames], target_ids, blur_radius)
+    H, W = soft_counts.shape[1:]
+    diag_sq = float(H * H + W * W)
 
     # Pre-sample 2D points from each mask region for the coverage loss.
-    # These are fixed across iterations (re-sampling each iter is too noisy).
+    # These are fixed across iterations (re-sampling each iter is too noisy);
+    # the loss only uses their centroid and bbox extent.
     use_coverage = float(cfg.lambda_mask_coverage) > 0.0 and cfg.num_sample_mask_points > 0
-    mask_sample_pts: Dict[int, torch.Tensor] = {}
+    has_mask_pts = torch.zeros(len(valid_frames), dtype=torch.bool, device=device)
+    m_center = torch.zeros(len(valid_frames), 2, device=device)
+    m_ext = torch.zeros(len(valid_frames), 2, device=device)
     if use_coverage:
-        for ti in valid_frames:
-            target_id = mask_ids[ti] if mask_ids is not None else obj_id
-            pts = _sample_points_from_mask(masks[ti], target_id, cfg.num_sample_mask_points)
+        for i, ti in enumerate(valid_frames):
+            pts = _sample_points_from_mask(masks[ti], target_ids[i], cfg.num_sample_mask_points)
             if pts is not None:
-                mask_sample_pts[ti] = pts
+                has_mask_pts[i] = True
+                m_center[i] = pts.mean(dim=0)
+                m_ext[i] = pts.max(dim=0).values - pts.min(dim=0).values
 
     # Approximate pixel-scale factor so regularisation terms are comparable to the
     # pixel-space data loss. Without this, vel/accel in SMPL-X metres are ~10^6
@@ -238,62 +303,50 @@ def optimize_mask_reprojection(
         opt.zero_grad(set_to_none=True)
         t = t0 + dt
 
-        loss_vertex_in_mask = torch.tensor(0.0, device=device)
-        loss_coverage = torch.tensor(0.0, device=device)
-        n_frames = 0
-        n_coverage = 0
-
-        for ti in valid_frames:
-            smask = soft_masks[ti]
-            H, W = smask.shape
-
-            v_cam = verts_sampled[ti] + t[ti:ti+1]
-            in_front = v_cam[:, 2] > 0.1
-            if not in_front.any():
-                continue
-            v_cam_front = v_cam[in_front]
-
-            v_2d = project_vertices_to_2d(v_cam_front, K)
-            if cfg.mask_scale != 1.0:
-                v_2d = v_2d * cfg.mask_scale
-
-            in_bounds = (v_2d[:, 0] >= 0) & (v_2d[:, 0] < W) & \
-                        (v_2d[:, 1] >= 0) & (v_2d[:, 1] < H)
-            if not in_bounds.any():
-                continue
-            v_2d_valid = v_2d[in_bounds]
-
-            sampled_vals = _sample_soft_mask(smask, v_2d_valid)
-            loss_vertex_in_mask = loss_vertex_in_mask + (1.0 - sampled_vals.mean())
-            n_frames += 1
-
-            # Coverage: projected mesh should match the mask in position and
-            # scale.  Uses centroid + bbox-extent matching instead of the full
-            # pairwise distance matrix (torch.cdist) which blows up the
-            # autograd graph when accumulated over hundreds of frames.
-            if use_coverage and ti in mask_sample_pts:
-                mp = mask_sample_pts[ti]                     # (M, 2)
-                diag_sq = float(H * H + W * W)
-
-                # Centroid alignment (position)
-                v_center = v_2d_valid.mean(dim=0)            # (2,)
-                m_center = mp.mean(dim=0)                    # (2,) const
-                cov_centroid = ((v_center - m_center) ** 2).sum() / diag_sq
-
-                # Bounding-box extent alignment (scale)
-                v_ext = v_2d_valid.max(dim=0).values - v_2d_valid.min(dim=0).values
-                m_ext = mp.max(dim=0).values - mp.min(dim=0).values
-                cov_extent = ((v_ext - m_ext) ** 2).sum() / diag_sq
-
-                loss_coverage = loss_coverage + cov_centroid + cov_extent
-                n_coverage += 1
-
+        # Project the sampled vertices of every valid frame: (F, P, ...)
+        v_cam = verts_v + t[fidx].unsqueeze(1)
+        in_front = v_cam[..., 2] > 0.1
+        v_proj = v_cam @ K.T
+        z = torch.where(in_front, v_proj[..., 2], torch.ones_like(v_proj[..., 2]))
+        v_2d = v_proj[..., :2] / (z.unsqueeze(-1) + 1e-8)
+        if cfg.mask_scale != 1.0:
+            v_2d = v_2d * cfg.mask_scale
+        valid = in_front & (v_2d[..., 0] >= 0) & (v_2d[..., 0] < W) & \
+                (v_2d[..., 1] >= 0) & (v_2d[..., 1] < H)
+        v_2d = torch.where(valid.unsqueeze(-1), v_2d, torch.zeros_like(v_2d))
+        n_valid = valid.sum(dim=1)
+        frame_ok = n_valid > 0
+        n_frames = int(frame_ok.sum().item())
         if n_frames == 0:
             continue
+        validf = valid.to(v_2d.dtype)
+        n_valid_f = n_valid.clamp(min=1).to(v_2d.dtype)
 
-        loss_vertex_in_mask = loss_vertex_in_mask / n_frames
+        sampled_vals = _sample_soft_masks_batched(soft_counts, soft_div, v_2d)
+        mean_inside = (sampled_vals * validf).sum(dim=1) / n_valid_f
+        loss_vertex_in_mask = (1.0 - mean_inside)[frame_ok].sum() / n_frames
+
+        # Coverage: projected mesh should match the mask in position and
+        # scale.  Uses centroid + bbox-extent matching instead of the full
+        # pairwise distance matrix (torch.cdist) which blows up the
+        # autograd graph when accumulated over hundreds of frames.
+        loss_coverage = torch.tensor(0.0, device=device)
+        cov_ok = frame_ok & has_mask_pts
+        n_coverage = int(cov_ok.sum().item())
         if n_coverage > 0:
-            loss_coverage = loss_coverage / n_coverage
+            v_center = (v_2d * validf.unsqueeze(-1)).sum(dim=1) / n_valid_f.unsqueeze(-1)
+            big = torch.finfo(v_2d.dtype).max
+            vmask = valid.unsqueeze(-1)
+            v_max = torch.where(vmask, v_2d, torch.full_like(v_2d, -big)).max(dim=1).values
+            v_min = torch.where(vmask, v_2d, torch.full_like(v_2d, big)).min(dim=1).values
+            # Frames without valid points have +-big here; zero them so their
+            # (masked-out) loss terms can't produce inf/NaN gradients
+            fok = frame_ok.unsqueeze(-1)
+            v_max = torch.where(fok, v_max, torch.zeros_like(v_max))
+            v_min = torch.where(fok, v_min, torch.zeros_like(v_min))
+            cov_centroid = ((v_center - m_center) ** 2).sum(dim=-1) / diag_sq
+            cov_extent = ((v_max - v_min - m_ext) ** 2).sum(dim=-1) / diag_sq
+            loss_coverage = (cov_centroid + cov_extent)[cov_ok].sum() / n_coverage
 
         # Scale regularisation to pixel-equivalent units
         loss_prior = ((t - t0) ** 2).sum(dim=-1).mean() * (pix_scale ** 2)
