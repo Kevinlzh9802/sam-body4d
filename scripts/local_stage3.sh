@@ -102,3 +102,5 @@ fi
 mkdir -p "$OUT/jitter"
 run scripts/jitter_check.py --raw "$OUT/raw_mhr.pt" --config "$CFG" --device "$DEVICE" --out "$OUT/jitter" \
   ${S3_ARGS[@]+"${S3_ARGS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} | tee "$OUT/jitter/jitter_report.txt"
+
+[ "$RUN_STAGE3" = 0 ] || echo "[INFO] View the meshes: python scripts/view_stage3.py $OUT/stage3_full  (needs viser)"
