@@ -248,7 +248,7 @@ def plot_2d_projections_from_stage3(
 ) -> None:
     """
     Convenience function to compute and plot 2D projections in one call.
-    Called from stage3_mhr_full.py after stage 3 processing.
+    Called after Stage 3 processing (stage3_mhr.py).
     
     Args:
         world_scale: Scale factor to convert SMPL-X meters to extrinsic units (default 100.0 for cm).

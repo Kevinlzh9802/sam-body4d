@@ -1,31 +1,35 @@
 #!/bin/bash
-# Stage 3: smooth raw MHR params and export meshes -> $SMOOTH_DIR/<seq>/<mode>/meshes_4d_individual/
-# (<mode> is full, segment or simple).
+# Stage 3: raw MHR params -> smoothed, mask-aligned, grounded meshes (stage3_mhr.py)
+# -> $SMOOTH_DIR/<seq>/<label>/meshes_4d_individual/
+#
+# Steps (stage3_mhr.py, one person at a time): temporal smoothing -> MHR forward ->
+# mask reprojection -> ground (only with extrinsics: each person scaled about the
+# camera centre + shifted along the viewing ray so the feet are on the floor,
+# the image stays put) -> export (world coordinates with extrinsics, else camera).
 #
 # Needs $RAW_DIR/<seq>/raw_mhr.pt (Stage 2), $STAGE1_DIR/<seq>/masks.zip and
 # images.zip (Stage 1), the sequence's intrinsics JSON and, if available, its
-# extrinsics JSON (required for conflab; without it cosilab exports in camera
-# space and skips ground optimization). All three dirs are <dataset>/bbox_kp/
-# except cosilab on DAIC (see lib/dataset.sh), where the Stage 1 folder is only read.
+# extrinsics JSON (required for conflab; cosilab: scripts/make_ground_extrinsics.py).
+# All three dirs are <dataset>/bbox_kp/ except cosilab on DAIC (see lib/dataset.sh),
+# where the Stage 1 folder is only read.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
-# submits itself to SLURM, running the code checkout at CODE_HOST (lib/cluster.sh).
+# submits itself to SLURM (CPU job), running the code checkout at CODE_HOST (lib/cluster.sh).
 #
 # Usage:
 #   bash job_scripts/stage3_mhr.sh cam06_batch01
-#   bash job_scripts/stage3_mhr.sh -segment cam06_batch01
-#   bash job_scripts/stage3_mhr.sh -simple -all cam06
+#   bash job_scripts/stage3_mhr.sh -all cam06
+#   bash job_scripts/stage3_mhr.sh -no-ground cam06_batch01     # -> <seq>/stage3_noground
 #   bash job_scripts/stage3_mhr.sh -dataset conflab 428
-#   bash job_scripts/stage3_mhr.sh -dataset conflab -all -segment 4
-#
-# Modes:
-#   (default)  stage3_mhr_full.py    - whole sequence as one trajectory
-#   -segment   stage3_mhr_segment.py - each video segment independently, then concatenated
-#   -simple    stage3_mhr_simple.py  - no optimization; mask centroids + fixed world height
 #
 # Options:
 #   -dataset <cosilab|conflab>   default: cosilab
 #   -cam <num> -b <spec> | -all <prefix> | <seq> ...   (see lib/common.sh)
+#   -sigma <frames>              smoothing width (default: stage3_mhr.py's)
+#   -no-smooth | -no-mask | -no-ground   leave a step out (to compare)
+#   -camera-space                export in camera space even with extrinsics
+#   -label <name>                output folder name (default: stage3, plus _no<step>
+#                                for each step left out, plus _cam for -camera-space)
 #   -sbatch "<flags>"            extra sbatch flags
 set -euo pipefail
 
@@ -38,20 +42,30 @@ fi
 source "$SB4D_CODE/job_scripts/lib/common.sh"
 
 ORIG_ARGS=("$@")
-MODE=full
+STAGE3_ARGS=()
+LABEL=""
+SUFFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -segment|--segment) MODE=segment; shift ;;
-    -simple|--simple)   MODE=simple; shift ;;
+    -sigma|--sigma)     [ $# -ge 2 ] || die "$1 needs a value"
+                        STAGE3_ARGS+=(--smooth-sigma "$2"); SUFFIX+="_s$2"; shift 2 ;;
+    -no-smooth)         STAGE3_ARGS+=(--no-smooth); SUFFIX+="_nosmooth"; shift ;;
+    -no-mask)           STAGE3_ARGS+=(--no-mask-reproj); SUFFIX+="_nomask"; shift ;;
+    -no-ground)         STAGE3_ARGS+=(--no-ground); SUFFIX+="_noground"; shift ;;
+    -camera-space)      STAGE3_ARGS+=(--export-camera-space); SUFFIX+="_cam"; shift ;;
+    -label|--label)     [ $# -ge 2 ] || die "$1 needs a value"; LABEL="$2"; shift 2 ;;
+    -segment|-simple|--segment|--simple)
+      die "$1 was removed: Stage 3 is one pipeline now (stage3_mhr.py), see -h" ;;
     *)
       parse_common_args "$@"
       shift "$COMMON_SHIFT"
       ;;
   esac
 done
+LABEL="${LABEL:-stage3$SUFFIX}"
 
-STAGE3_SCRIPT="stage3_mhr_${MODE}.py"
+STAGE3_SCRIPT="stage3_mhr.py"
 # CPU job (lib/slurm.sh); the stage 3 scripts fall back to --device cpu
 CONTAINER_GPU=0
 
@@ -61,10 +75,10 @@ self_submit stage3 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
 echo "[INFO] Sequences: ${SEQS[*]}"
-echo "[INFO] Stage 3 mode: $MODE ($STAGE3_SCRIPT)"
+echo "[INFO] Stage 3: $STAGE3_SCRIPT ${STAGE3_ARGS[*]}"
 echo "[INFO] Stage 1 dir: $STAGE1_DIR"
 echo "[INFO] Raw dir:     $RAW_DIR"
-echo "[INFO] Output dir:  $SMOOTH_DIR/<seq>/$MODE"
+echo "[INFO] Output dir:  $SMOOTH_DIR/<seq>/$LABEL"
 echo ""
 
 total=${#SEQS[@]}
@@ -104,11 +118,11 @@ for seq in "${SEQS[@]}"; do
     echo ""
     continue
   else
-    echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export, no ground opt"
+    echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export, no ground step"
   fi
 
-  # One output folder per mode, so modes don't overwrite each other
-  out_dir="$SMOOTH_DIR/$seq/$MODE"
+  # One output folder per label, so variants don't overwrite each other
+  out_dir="$SMOOTH_DIR/$seq/$LABEL"
   DIR_ARGS=(--out "$(host_to_container "$out_dir")")
   if [ "$STAGE1_DIR" != "$RAW_DIR" ]; then
     DIR_ARGS+=(--input-dir "$(host_to_container "$STAGE1_DIR/$seq")")
@@ -118,18 +132,13 @@ for seq in "${SEQS[@]}"; do
   echo "[INFO] output=$out_dir"
   echo "[INFO] camera-intrinsics-json=$intrinsics"
 
-  if [ "$MODE" = simple ]; then
-    MODE_ARGS=()
-  else
-    MODE_ARGS=(--config "$CONFIG" --enable-ground)
-  fi
-
   if run_in_container "$STAGE3_SCRIPT" \
     --raw "$(host_to_container "$raw")" \
     --camera-intrinsics-json "$(host_to_container "$intrinsics")" \
     ${DIR_ARGS[@]+"${DIR_ARGS[@]}"} \
-    ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} \
-    ${EXTRINSICS_ARGS[@]+"${EXTRINSICS_ARGS[@]}"}; then
+    --config "$CONFIG" \
+    ${EXTRINSICS_ARGS[@]+"${EXTRINSICS_ARGS[@]}"} \
+    ${STAGE3_ARGS[@]+"${STAGE3_ARGS[@]}"}; then
     echo "[INFO] [$idx/$total] folder=$seq completed successfully."
   else
     echo "[ERROR] [$idx/$total] folder=$seq FAILED." >&2

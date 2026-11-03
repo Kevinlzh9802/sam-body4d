@@ -9,14 +9,21 @@ variants of the raw Stage 2 params and measures how much each one shakes:
   smooth          every param group smoothed over time (Gaussian, --smooth-sigma
                   frames, within each run of consecutive frames of a person)
   only:<group>    smooth, except <group> left raw -> the jitter that group causes
-  stage3_option1  Stage 3's own smoothing (gated EMA on body_pose/hand/pred_cam_t,
-                  global_rot EMA, shape/scale frozen to the first frame)
+  stage3_smooth   Stage 3's smoothing (smoothing/temporal.py) with its defaults,
+                  and with all widths set to each --stage3-sigmas value
 
 Groups: cam_depth (distance along the viewing ray, pred_cam_t z), cam_image (the
 ray direction, i.e. where the person is in the image), global_rot, body_pose,
 hand, shape_scale (shape + scale + face).
 
-Meshes exported by stage3_mhr_full.py can be measured too (--stage3-dir).
+Meshes exported by Stage 3 can be measured too (--stage3-dir).
+
+Over-smoothing check ("removed / noise"): the RMS of what a variant removed
+from the raw meshes, over the raw noise level estimated from second
+differences (white noise: var(d2 x) = 6 var(x); Stage 2 estimates every frame
+independently). A Gaussian of sigma s that removes only white noise gives
+sqrt(1 - 2 g0 + sum g^2) (g0 = 1/(s sqrt(2 pi)), sum g^2 = 1/(2 s sqrt(pi))),
+printed as "noise only"; clearly more means real motion is removed too.
 
 Jitter per person = high-frequency part of the vertex trajectories,
 v - G(v) with a Gaussian of --sigma frames (RMS, mm). It is split into the
@@ -27,13 +34,12 @@ plus what the metric cannot separate from it.
 Usage (inside the container, see scripts/local_stage3.sh):
   python scripts/jitter_check.py --raw raw_mhr.pt --segment cam06_seg010 --write-slice slice.pt
   python scripts/jitter_check.py --raw slice.pt --config cfg.yaml --out jitter/ \
-      --stage3-dir stage3_full=experiments/stage3_local/.../stage3_full
+      --stage3-dir stage3=experiments/stage3_local/.../stage3
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
 import glob
 import json
 import os
@@ -53,8 +59,8 @@ for p in (REPO_DIR, os.path.join(REPO_DIR, "models", "sam_3d_body")):
         sys.path.insert(0, p)
 
 from models.sam_3d_body.sam_3d_body.models.meta_arch.mhr_io import load_raw_mhr, save_raw_mhr
-from smoothing.stage3_core import freeze_shape_scale_first_frame, stack_frames_to_tensors
-from utils import ema_smooth_global_rot_per_obj_id_adaptive, kalman_smooth_mhr_params_per_obj_id_adaptive
+from smoothing.stage3_core import stack_frames_to_tensors
+from smoothing.temporal import SmoothConfig, smooth_mhr_params
 
 GROUPS = {
     "cam_depth": None,  # handled via pred_cam_t
@@ -164,11 +170,11 @@ def compose(raw, sm, raw_groups: List[str]) -> Dict[str, np.ndarray]:
 def camera_vertices(estimator, params: Dict[str, np.ndarray], T: int, N: int, device,
                     batch_size: int, vstep: int) -> np.ndarray:
     """(T, N, V', 3) camera-space vertices in metres (every vstep-th vertex)."""
-    from stage3_mhr_full import run_batched_mhr_forward
+    from stage3_mhr import mhr_forward
 
-    mhr = {k: torch.from_numpy(np.ascontiguousarray(v.reshape(T * N, -1))).float().to(device)
-           for k, v in params.items()}
-    verts, _j3d, _faces = run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N)
+    mhr = {k: torch.from_numpy(np.ascontiguousarray(v.reshape(T * N, -1))).float()
+           for k, v in params.items() if k != "pred_cam_t"}
+    verts, _j3d = mhr_forward(estimator.model.head_pose, mhr, device, batch_size)
     v = verts[:, ::vstep].numpy().reshape(T, N, -1, 3)
     del verts
     return v + params["pred_cam_t"].reshape(T, N, 1, 3)
@@ -232,8 +238,37 @@ def measure(V: np.ndarray, runs, sigma: float, per_person: bool = False):
     return (summarize(ms_all), per) if per_person else summarize(ms_all)
 
 
+def removal(V: np.ndarray, Vraw: np.ndarray, runs) -> Dict[str, float]:
+    """RMS (mm) of V - Vraw (what a variant removed) and of the raw noise, for the
+    body translation and the pose/shape part, over the same runs as the jitter."""
+    ss = {"rm_trans": 0.0, "rm_local": 0.0, "nz_trans": 0.0, "nz_local": 0.0}
+    n = n2 = 0
+    for si, rs in runs.items():
+        for r in rs:
+            c, craw = V[r, si].mean(axis=1), Vraw[r, si].mean(axis=1)
+            loc, lraw = V[r, si] - c[:, None], Vraw[r, si] - craw[:, None]
+            ss["rm_trans"] += float(((c - craw) ** 2).sum())
+            ss["rm_local"] += float(((loc - lraw) ** 2).sum(axis=2).mean(axis=1).sum())
+            ss["nz_trans"] += float(((craw[2:] - 2 * craw[1:-1] + craw[:-2]) ** 2).sum()) / 6.0
+            ss["nz_local"] += float(((lraw[2:] - 2 * lraw[1:-1] + lraw[:-2]) ** 2).sum(axis=2).mean(axis=1).sum()) / 6.0
+            n += len(r)
+            n2 += max(len(r) - 2, 0)
+    mm = lambda x, m: 1000.0 * float(np.sqrt(x / max(m, 1)))
+    out = {"removed_trans_mm": mm(ss["rm_trans"], n), "removed_pose_shape_mm": mm(ss["rm_local"], n),
+           "noise_trans_mm": mm(ss["nz_trans"], n2), "noise_pose_shape_mm": mm(ss["nz_local"], n2)}
+    out["removed_over_noise_trans"] = out["removed_trans_mm"] / max(out["noise_trans_mm"], 1e-9)
+    out["removed_over_noise_pose_shape"] = out["removed_pose_shape_mm"] / max(out["noise_pose_shape_mm"], 1e-9)
+    return out
+
+
+def noise_only_ratio(sigma: float) -> float:
+    """removed / noise for a Gaussian of sigma frames applied to white noise."""
+    g0 = 1.0 / (sigma * np.sqrt(2 * np.pi))
+    return float(np.sqrt(max(1.0 - 2.0 * g0 + 1.0 / (2.0 * sigma * np.sqrt(np.pi)), 0.0)))
+
+
 def measure_stage3_dir(path: str, sigma: float, vstep: int, min_len: int):
-    """Same metric on stage3_mhr_full.py meshes (meshes_4d_individual/*.npz)."""
+    """Same metric on Stage 3 meshes (meshes_4d_individual/*.npz)."""
     opts = {}
     opt_file = os.path.join(path, "stage3_run_options.txt")
     if os.path.exists(opt_file):
@@ -275,8 +310,10 @@ def main() -> None:
     ap.add_argument("--min-run", type=int, default=30, help="Ignore visible runs shorter than this (frames)")
     ap.add_argument("--vertex-step", type=int, default=8, help="Use every n-th vertex for the metric")
     ap.add_argument("--mhr-batch-size", type=int, default=256)
+    ap.add_argument("--stage3-sigmas", type=float, nargs="*", default=[],
+                    help="Also measure Stage 3 smoothing with all widths set to each of these (frames)")
     ap.add_argument("--stage3-dir", action="append", default=[], metavar="LABEL=DIR",
-                    help="Also measure stage3_mhr_full.py output in DIR")
+                    help="Also measure Stage 3 output (meshes_4d_individual/) in DIR")
     args = ap.parse_args()
 
     payload = load_raw_mhr(args.raw, map_location="cpu")
@@ -309,32 +346,28 @@ def main() -> None:
                                 mhr_path=cfg.sam_3d_body.get("mhr_path", ""))
     estimator = SimpleNamespace(model=model, faces=model.head_pose.faces.cpu().numpy())
 
-    def run(params):
-        V = camera_vertices(estimator, params, T, N, device, args.mhr_batch_size, args.vertex_step)
-        return measure(V, runs, args.sigma)
-
     groups = [g for g in GROUPS if g.startswith("cam_") or any(k in raw for k in GROUPS[g])]
     results: Dict[str, Dict[str, float]] = {}
     Vraw = camera_vertices(estimator, compose(raw, sm, groups), T, N, device, args.mhr_batch_size, args.vertex_step)
     results["raw"], per_person = measure(Vraw, runs, args.sigma, per_person=True)
-    del Vraw
+
+    def run(params):
+        V = camera_vertices(estimator, params, T, N, device, args.mhr_batch_size, args.vertex_step)
+        return {**measure(V, runs, args.sigma), **removal(V, Vraw, runs)}
+
     results["smooth"] = run(compose(raw, sm, []))
     for g in groups:
         results[f"only:{g}"] = run(compose(raw, sm, [g]))
 
-    # Stage 3 Option 1, exactly as stage3_mhr_full.py applies it
-    s3 = {k: v.clone() for k, v in mhr_t.items()}
-    s3 = kalman_smooth_mhr_params_per_obj_id_adaptive(
-        mhr_dict=s3, num_frames=T, frame_obj_ids=slots,
-        keys_to_smooth=[k for k in ["body_pose", "hand", "pred_cam_t"] if k in s3],
-        kalman_cfg=None, vis_flags=copy.deepcopy(vis_flags),
-    )
-    freeze_shape_scale_first_frame(s3, T=T, N=N)
-    s3 = ema_smooth_global_rot_per_obj_id_adaptive(
-        mhr_dict=s3, num_frames=T, frame_obj_ids=slots,
-        vis_flags=copy.deepcopy(vis_flags), key_name="global_rot",
-    )
-    results["stage3_option1"] = run({k: v.cpu().numpy().reshape(T, N, -1) for k, v in s3.items() if k != "focal_length"})
+    # Stage 3 smoothing, exactly as Stage 3 applies it: its defaults, then each --stage3-sigmas
+    s3_cfgs = {"stage3_smooth default": SmoothConfig()}
+    for s3_sigma in args.stage3_sigmas:
+        s3_cfgs[f"stage3_smooth s={s3_sigma:g}"] = SmoothConfig(sigma_pose=s3_sigma, sigma_rot=s3_sigma,
+                                                                sigma_cam=s3_sigma)
+    for name, s3_cfg in s3_cfgs.items():
+        s3 = smooth_mhr_params(mhr_t, frame_names, slots, obj_ids, s3_cfg)
+        results[name] = run({k: v.cpu().numpy().reshape(T, N, -1) for k, v in s3.items() if k != "focal_length"})
+    del Vraw
 
     for spec in args.stage3_dir:
         label, _, path = spec.partition("=")
@@ -353,6 +386,17 @@ def main() -> None:
         print(f"{name:<22}" + "".join(f"{r.get(c, float('nan')):>17.2f}" for c in cols) + f"{share:>14}")
     print("\n'share of raw': extra jitter (in squared mm) that leaving one group raw adds over 'smooth',\n"
           "as a fraction of raw minus smooth. Shares need not sum to 100% (groups interact).")
+
+    print(f"\nOver-smoothing check: removed from raw / raw noise (noise from second differences, mm)")
+    print(f"{'variant':<22}{'noise only':>12}{'pose/shape':>12}{'translation':>13}"
+          f"{'removed pose':>14}{'noise pose':>12}")
+    for name, r in results.items():
+        if "removed_over_noise_pose_shape" not in r or name.startswith("only:"):
+            continue
+        sig = (float(name.split("s=")[1]) if "s=" in name else
+               SmoothConfig().sigma_pose if name == "stage3_smooth default" else args.smooth_sigma)
+        print(f"{name:<22}{noise_only_ratio(sig):>12.2f}{r['removed_over_noise_pose_shape']:>12.2f}"
+              f"{r['removed_over_noise_trans']:>13.2f}{r['removed_pose_shape_mm']:>14.2f}{r['noise_pose_shape_mm']:>12.2f}")
 
     worst = sorted(per_person.items(), key=lambda kv: -kv[1].get("total_mm", 0))[:5]
     print("\nRaw jitter per person (worst 5):")
