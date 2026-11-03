@@ -19,17 +19,20 @@
 # frames, 23 people): stage 3 works one person at a time; its peak is the
 # sequence's masks (~8 GB) + one person's soft masks (~8 GB) and meshes
 # (~4 GB, x2 while exporting). Check `seff <jobid>` and adjust.
+# Time limits: one Stage 1 job and one Stage 2 part (6000 frames) finish within
+# 20 h; Stage 3 on CPU took ~70 s for 3000 person-frames locally, ~1-2 h
+# extrapolated to a full cosilab batch (~200k person-frames), so 8 h leaves room.
 # Partition "all" (the department partition ewi-insy is not open to this user).
 # Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb (verified with sbatch --test-only).
 sbatch_flags() {
   local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem daic_gpu
   case "$stage" in
     #             DelftBlue                                                      DAIC
-    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=""; daic_cpus=""; daic_mem=""; daic_gpu="" ;;
+    stage1)       time=20:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=""; daic_cpus=""; daic_mem=""; daic_gpu="" ;;
     stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=3-00:00:00; daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=1-00:00:00; daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage2_part)  time=20:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=20:00:00;   daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_merge) time=0:30:00;  partition=compute;  cpus=2;  mem_per_cpu=16000M; daic_time=0:30:00;    daic_cpus=2;  daic_mem=32G;  daic_gpu="" ;;
-    stage3)       time=24:00:00; partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=1-00:00:00; daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
+    stage3)       time=8:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=8:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 
