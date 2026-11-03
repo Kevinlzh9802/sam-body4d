@@ -153,13 +153,17 @@ host_to_container() {
   echo "$p"
 }
 
-# Runs <script.py> from the code dir inside the apptainer image.
+# Runs <script.py> from the code dir inside the apptainer image. CONTAINER_GPU=0
+# leaves out --nv (CPU-only stages).
 run_in_container() {
   local script="$1"
   shift
   local project="$BIND_CODE" b
   container_binds
-  local cmd=(apptainer exec --nv --pwd "$project")
+  local cmd=(apptainer exec --pwd "$project")
+  [ "${CONTAINER_GPU:-1}" = 0 ] || cmd+=(--nv)
+  # torch would otherwise start a thread per core of the whole node
+  [ -z "${SLURM_CPUS_PER_TASK:-}" ] || cmd+=(--env "OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK")
   for b in "${BINDS[@]}"; do
     cmd+=(--bind "$b")
   done

@@ -10,22 +10,25 @@
 #
 # DAIC (new environment, https://doc.daic.tudelft.nl/tutorials/slurm/): GPUs by
 # full type name. Stage 2 uses an RTX Pro 6000 (96 GB, Blackwell), which needs
-# the CUDA 12.8 image (SIF_PATH_CU128, selected in stage2_sam3body.sh). Stage 3
-# stays on an A40 (48 GB) with the cu118 image. Override the GPU with e.g.
-# -sbatch "--gres=gpu:nvidia_l40:1". Memory is estimated for a cosilab batch
-# (960x540, 18000 frames, 23 people): stage 3 keeps one T*N x 18439 x 3 float32
-# vertex tensor (~92 GB) in RAM. Check `seff <jobid>` and adjust.
+# the CUDA 12.8 image (SIF_PATH_CU128, selected in stage2_sam3body.sh). Override
+# the GPU with e.g. -sbatch "--gres=gpu:nvidia_l40:1".
+# stage2_merge and stage3 are CPU only (empty daic_gpu; DelftBlue partition
+# "compute"): the merge only concatenates part files, and stage 3 runs the MHR
+# forward pass and the small cam_t optimizations on CPU. Their launchers set
+# CONTAINER_GPU=0. Memory is estimated for a cosilab batch (960x540, 18000
+# frames, 23 people): stage 3 keeps one T*N x 18439 x 3 float32 vertex tensor
+# (~92 GB) in RAM. Check `seff <jobid>` and adjust.
 # Partition "all" (the department partition ewi-insy is not open to this user).
 # Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb (verified with sbatch --test-only).
 sbatch_flags() {
   local stage="$1" time partition cpus mem_per_cpu daic_time daic_cpus daic_mem daic_gpu
   case "$stage" in
-    #             DelftBlue                                                     DAIC
-    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=""; daic_cpus=""; daic_mem=""; daic_gpu="" ;;
-    stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=3-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=1-00:00:00; daic_cpus=4; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    stage2_merge) time=2:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M; daic_time=2:00:00;    daic_cpus=2; daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    stage3)       time=18:00:00; partition=gpu;      cpus=24; mem_per_cpu=4000M; daic_time=1-00:00:00; daic_cpus=8; daic_mem=128G; daic_gpu=nvidia_a40 ;;
+    #             DelftBlue                                                      DAIC
+    stage1)       time=6:00:00;  partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=""; daic_cpus=""; daic_mem=""; daic_gpu="" ;;
+    stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=3-00:00:00; daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage2_part)  time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=1-00:00:00; daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage2_merge) time=0:30:00;  partition=compute;  cpus=2;  mem_per_cpu=16000M; daic_time=0:30:00;    daic_cpus=2;  daic_mem=32G;  daic_gpu="" ;;
+    stage3)       time=24:00:00; partition=compute;  cpus=24; mem_per_cpu=4000M;  daic_time=1-00:00:00; daic_cpus=16; daic_mem=128G; daic_gpu="" ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 
@@ -44,8 +47,8 @@ sbatch_flags() {
       --partition="$partition"
       --cpus-per-task="$cpus"
       --mem-per-cpu="$mem_per_cpu"
-      --gpus-per-task=1
     )
+    [ "$partition" = compute ] || SBATCH_FLAGS+=(--gpus-per-task=1)
   else
     [ -n "$daic_time" ] || { echo "[ERROR] $stage has no DAIC resources" >&2; exit 2; }
     SBATCH_FLAGS+=(
@@ -54,8 +57,8 @@ sbatch_flags() {
       --partition=all
       --cpus-per-task="$daic_cpus"
       --mem="$daic_mem"
-      --gres="gpu:$daic_gpu:1"
     )
+    [ -z "$daic_gpu" ] || SBATCH_FLAGS+=(--gres="gpu:$daic_gpu:1")
   fi
 }
 

@@ -52,6 +52,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 STAGE3_SCRIPT="stage3_mhr_${MODE}.py"
+# CPU job (lib/slurm.sh); the stage 3 scripts fall back to --device cpu
+CONTAINER_GPU=0
 
 load_dataset "$DATASET_ARG"
 resolve_seqs "$RAW_DIR"

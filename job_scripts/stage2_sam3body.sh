@@ -81,7 +81,7 @@ case "$PART" in
 esac
 case "$PART" in
   "")    ;;
-  merge) STAGE=stage2_merge ;;
+  merge) STAGE=stage2_merge; CONTAINER_GPU=0 ;;
   *)     STAGE=stage2_part ;;
 esac
 
