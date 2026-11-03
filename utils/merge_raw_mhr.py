@@ -9,10 +9,9 @@ The individual part files are always kept on disk after merging.
 from __future__ import annotations
 
 import glob
+import math
 import os
 from typing import Any, Dict, List, Optional, Tuple
-
-NUM_EXPECTED_PARTS = 3
 
 
 def discover_part_files(out_dir: str) -> List[str]:
@@ -21,7 +20,12 @@ def discover_part_files(out_dir: str) -> List[str]:
     return sorted(glob.glob(os.path.join(parts_dir, "raw_mhr_part_*.pt")))
 
 
-def all_parts_ready(out_dir: str, n_expected: int = NUM_EXPECTED_PARTS) -> bool:
+def num_expected_parts(n_total: int, frames_per_part: int) -> int:
+    """Number of non-empty parts needed to cover *n_total* frames."""
+    return max(1, math.ceil(n_total / max(1, frames_per_part)))
+
+
+def all_parts_ready(out_dir: str, n_expected: int) -> bool:
     """Check whether *n_expected* part files are present."""
     return len(discover_part_files(out_dir)) >= n_expected
 
@@ -56,6 +60,7 @@ def merge_raw_mhr_parts(
     all_frames: List[Dict[str, Any]] = []
     meta_base: Dict[str, Any] = {}
     total_corrupted = 0
+    n_total_expected = None
 
     for pf in part_files:
         payload = load_raw_mhr(pf, map_location="cpu")
@@ -65,13 +70,28 @@ def merge_raw_mhr_parts(
               f"range [{part_meta.get('frame_start', '?')}, {part_meta.get('frame_end', '?')}]")
         all_frames.extend(part_frames)
         total_corrupted += part_meta.get("num_corrupted_interpolated", 0)
+        n_total_expected = part_meta.get("num_frames_total", n_total_expected)
         if not meta_base:
             meta_base = {k: v for k, v in part_meta.items()
                          if k not in ("frame_start", "frame_end", "part_label",
-                                      "num_corrupted_interpolated", "note")}
+                                      "num_corrupted_interpolated", "note", "num_frames_total")}
 
     all_frames.sort(key=lambda f: int(f["frame"]))
     print(f"[INFO] Merged total: {len(all_frames)} frames, {total_corrupted} interpolated")
+
+    # Overlapping parts mean a stale part file from a different split is still there
+    idx = [int(f["frame"]) for f in all_frames]
+    dup = sorted({a for a, b in zip(idx, idx[1:]) if a == b})
+    if dup:
+        raise ValueError(
+            f"{len(dup)} frame(s) appear in more than one part (first: {dup[:5]}). "
+            f"Remove stale files from {os.path.dirname(part_files[0])} and merge again.")
+    gaps = [(a, b) for a, b in zip(idx, idx[1:]) if b - a > 1]
+    if gaps:
+        print(f"[WARN] {len(gaps)} gap(s) in frame numbers between parts, e.g. {gaps[:3]}")
+    if n_total_expected is not None and len(all_frames) != n_total_expected:
+        print(f"[WARN] Parts hold {len(all_frames)} frames, but the sequence has {n_total_expected}. "
+              f"A part is missing or from a different run.")
 
     segment_id_mappings = (
         load_segment_id_mappings(meta_base.get("input_dir") or out_dir)

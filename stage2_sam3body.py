@@ -41,7 +41,7 @@ from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.gpu_profiler import cuda_mem_snapshot, cuda_reset_peak_memory_stats, write_json
 from utils.id_mapping import load_segment_id_mappings, to_actual_pid, find_segment_for_frame
 from utils.merge_raw_mhr import (
-    merge_raw_mhr_parts, all_parts_ready, discover_part_files, NUM_EXPECTED_PARTS,
+    merge_raw_mhr_parts, all_parts_ready, discover_part_files, num_expected_parts,
 )
 from utils.model_factory import build_sam3d_body_from_config
 from utils.zip_utils import make_extract_root, resolve_archive_dir, zip_and_remove_dir
@@ -325,31 +325,6 @@ def main() -> None:
     if not os.path.isdir(image_dir) or not os.path.isdir(masks_dir):
         raise FileNotFoundError(f"Missing images/ or masks/ in: {input_dir}")
 
-    # Load ID mappings from Stage 1
-    segment_id_mappings = load_segment_id_mappings(input_dir)
-    if segment_id_mappings:
-        print(f"[INFO] Loaded per-segment ID mappings ({len(segment_id_mappings)} segments)")
-        for seg in segment_id_mappings:
-            print(f"[INFO]   frames [{seg['frame_start']}, {seg['frame_end']}]: {seg['consecutive_to_actual']}")
-    else:
-        print(f"[WARN] No id_mapping.json found in {input_dir}; IDs will not be converted.")
-
-    cfg_path = args.config or os.path.join(REPO_DIR, "configs", "body4d.yaml")
-    if not os.path.exists(cfg_path):
-        cfg_path = os.path.join(REPO_DIR, cfg_path)
-    cfg = OmegaConf.load(cfg_path)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Using device: {device}")
-    estimator = build_sam3d_body_from_config(cfg, device=device)
-    cuda_reset_peak_memory_stats()
-
-    os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
-
-    camera_intrinsics_path, cam_int = resolve_camera_intrinsics(
-        args.intrinsic_path, input_dir, args.camera_scale, device,
-    )
-
     # Discover files
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     images_list = sorted([p for ext in image_extensions for p in glob.glob(os.path.join(image_dir, ext))])
@@ -379,7 +354,39 @@ def main() -> None:
 
     n = len(images_list)
     if n == 0:
-        raise FileNotFoundError("Frame range is empty — nothing to process.")
+        # Short sequences need fewer parts (e.g. 10200 frames: p1, p2); the others
+        # merge on their own, so an empty part just exits.
+        print(f"[INFO] Part [{args.frame_start}, {args.frame_end}) starts after the last frame "
+              f"({n_total} frames); nothing to do.")
+        return
+    # Parts needed for this sequence, for the auto-merge below
+    frames_per_part = (args.frame_end - (args.frame_start or 0)) if args.frame_end is not None else n
+    n_parts_expected = num_expected_parts(n_total, frames_per_part)
+
+    # Load ID mappings from Stage 1
+    segment_id_mappings = load_segment_id_mappings(input_dir)
+    if segment_id_mappings:
+        print(f"[INFO] Loaded per-segment ID mappings ({len(segment_id_mappings)} segments)")
+        for seg in segment_id_mappings:
+            print(f"[INFO]   frames [{seg['frame_start']}, {seg['frame_end']}]: {seg['consecutive_to_actual']}")
+    else:
+        print(f"[WARN] No id_mapping.json found in {input_dir}; IDs will not be converted.")
+
+    cfg_path = args.config or os.path.join(REPO_DIR, "configs", "body4d.yaml")
+    if not os.path.exists(cfg_path):
+        cfg_path = os.path.join(REPO_DIR, cfg_path)
+    cfg = OmegaConf.load(cfg_path)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Using device: {device}")
+    estimator = build_sam3d_body_from_config(cfg, device=device)
+    cuda_reset_peak_memory_stats()
+
+    os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
+
+    camera_intrinsics_path, cam_int = resolve_camera_intrinsics(
+        args.intrinsic_path, input_dir, args.camera_scale, device,
+    )
 
     # Scan for corrupted frames
     corrupted_set, valid_indices, valid_images, valid_masks, n_valid = scan_corrupted_frames(
@@ -550,21 +557,22 @@ def main() -> None:
                 "frame_start": fs_idx,
                 "frame_end": fe_idx,
                 "part_label": part_label,
+                "num_frames_total": n_total,
             },
         }
         save_raw_mhr(part_path, payload)
         print(f"[INFO] Saved partial raw params to: {part_path}")
 
         # Auto-merge when all expected parts are present
-        if all_parts_ready(output_dir):
-            print(f"\n[INFO] All {NUM_EXPECTED_PARTS} parts detected — auto-merging into raw_mhr.pt")
+        if all_parts_ready(output_dir, n_parts_expected):
+            print(f"\n[INFO] All {n_parts_expected} parts detected — auto-merging into raw_mhr.pt")
             _, merged_frames, merged_meta = merge_raw_mhr_parts(output_dir)
             _run_post_merge(output_dir, merged_frames, merged_meta)
             if not read_only_input:
                 _rezip_input_dirs(input_dir)
         else:
             n_found = len(discover_part_files(output_dir))
-            print(f"[INFO] {n_found}/{NUM_EXPECTED_PARTS} parts ready. "
+            print(f"[INFO] {n_found}/{n_parts_expected} parts ready. "
                   f"Remaining parts will trigger auto-merge, or run with --merge manually.")
     else:
         # ---- Full run: save everything ----

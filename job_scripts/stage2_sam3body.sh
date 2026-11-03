@@ -15,9 +15,11 @@
 #   bash job_scripts/stage2_sam3body.sh -dataset conflab 228
 #   bash job_scripts/stage2_sam3body.sh -dataset conflab -all 2
 #
-# Split one sequence into 3 parallel jobs of 6000 frames each (frames
+# Split one sequence into parallel jobs of 6000 frames each (frames
 # [0,6000), [6000,12000), [12000,18000)); the last part to finish merges them
-# into raw_mhr.pt. `-part merge` merges by hand.
+# into raw_mhr.pt. Shorter sequences need fewer parts (10200 frames: p1, p2);
+# a part past the end exits without doing anything. `-part merge` merges by
+# hand (CPU only).
 #   bash job_scripts/stage2_sam3body.sh cam06_batch01 -part p1
 #   bash job_scripts/stage2_sam3body.sh cam06_batch01 -part p2
 #   bash job_scripts/stage2_sam3body.sh cam06_batch01 -part p3
@@ -46,7 +48,6 @@ source "$SB4D_CODE/job_scripts/lib/common.sh"
 ORIG_ARGS=("$@")
 PART=""
 BATCH_SIZE=""
-# Must match NUM_EXPECTED_PARTS=3 in utils/merge_raw_mhr.py
 FRAMES_PER_PART=6000
 
 while [[ $# -gt 0 ]]; do
