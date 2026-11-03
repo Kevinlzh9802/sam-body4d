@@ -132,9 +132,10 @@ def compute_pred_cam_t_from_centroids(
     fx, fy = float(K[0, 0]), float(K[1, 1])
     cx_k, cy_k = float(K[0, 2]), float(K[1, 2])
 
-    Rt = extr.R.transpose(0, 1).cpu().numpy()          # (3,3) = R^T
+    # X_world = R^T (X_cam - t), i.e. (X_cam - t) @ R for row vectors
+    R_np = extr.R.cpu().numpy()                         # (3,3)
     t_extr = extr.t.cpu().numpy().reshape(3)            # (3,)
-    Rt_col2 = Rt[:, 2]                                  # (3,)
+    R_col2 = R_np[:, 2]                                 # (3,)
 
     n_placed = 0
     for si, oid in enumerate(obj_ids_all):
@@ -161,12 +162,12 @@ def compute_pred_cam_t_from_centroids(
             )
 
             # Solve for depth z along ray such that world z == assumed_height_world
-            # X_world = (z * r * world_scale - t) @ R^T
-            # X_world[2] = z * ws * (r @ Rt_col2) - t @ Rt_col2
-            denom = world_scale * float(r @ Rt_col2)
+            # X_world = (z * r * world_scale - t) @ R
+            # X_world[2] = z * ws * (r @ R_col2) - t @ R_col2
+            denom = world_scale * float(r @ R_col2)
             if abs(denom) < 1e-8:
                 continue
-            z = (assumed_height_world + float(t_extr @ Rt_col2)) / denom
+            z = (assumed_height_world + float(t_extr @ R_col2)) / denom
             if z <= 0.05:
                 continue
 
@@ -269,9 +270,9 @@ def run_batched_mhr_forward(estimator, mhr, device, batch_size, T, N):
 def export_per_person_meshes(verts, pred_cam_t, obj_ids_all, frame_obj_ids_slots,
                              frame_names, faces_np, extr, world_scale, mesh_dir, T, N):
     os.makedirs(mesh_dir, exist_ok=True)
-    Rt_np = t_np = None
+    R_np = t_np = None
     if extr is not None:
-        Rt_np = extr.R.transpose(0, 1).cpu().numpy()
+        R_np = extr.R.cpu().numpy()  # X_world = R^T (X_cam - t), i.e. (X_cam - t) @ R for rows
         t_np = extr.t.cpu().numpy().reshape(1, 3)
 
     for oid in obj_ids_all:
@@ -286,8 +287,8 @@ def export_per_person_meshes(verts, pred_cam_t, obj_ids_all, frame_obj_ids_slots
             v = verts[bi].detach().float().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
             v_cam = v + camt
-            if Rt_np is not None:
-                v_world = (v_cam * world_scale - t_np) @ Rt_np
+            if R_np is not None:
+                v_world = (v_cam * world_scale - t_np) @ R_np
             else:
                 v_world = v_cam
             vs[k] = v_world

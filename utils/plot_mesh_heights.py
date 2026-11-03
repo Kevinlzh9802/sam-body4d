@@ -43,7 +43,6 @@ def compute_mesh_heights_world(
     Returns:
         {obj_id: (frame_indices ndarray, heights ndarray)} in world units.
     """
-    Rt = extr_R.T
     t = extr_t.reshape(1, 3)
 
     results: Dict[int, Tuple[List[int], List[float]]] = {}
@@ -57,7 +56,7 @@ def compute_mesh_heights_world(
             v = vertices[bi].detach().float().cpu().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
             v_world = (v + camt) * world_scale
-            v_world = (v_world - t) @ Rt
+            v_world = (v_world - t) @ extr_R  # R^T (x - t) for row vectors
             h = float(v_world[:, 2].max() - v_world[:, 2].min())
             frames_list.append(ti)
             heights_list.append(h)

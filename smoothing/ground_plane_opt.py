@@ -24,8 +24,8 @@ class Extrinsics:
         X_world = R^T (X_cam - t)
         X_cam: (...,3)
         """
-        Rt = self.R.transpose(0, 1)
-        return (X_cam - self.t.view(1, 3)) @ Rt
+        # Row vectors: R^T x == x @ R
+        return (X_cam - self.t.view(1, 3)) @ self.R
 
 
 def _find_key(data: Dict, keys: Tuple[str, ...]):

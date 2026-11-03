@@ -158,9 +158,9 @@ def export_per_person_meshes(
     """Export one ``.npz`` per person with vertices, faces, and frame_names."""
     os.makedirs(mesh_dir, exist_ok=True)
 
-    Rt_np = t_np = None
+    R_np = t_np = None
     if extr is not None:
-        Rt_np = extr.R.transpose(0, 1).cpu().numpy()
+        R_np = extr.R.cpu().numpy()  # X_world = R^T (X_cam - t), i.e. (X_cam - t) @ R for rows
         t_np = extr.t.cpu().numpy().reshape(1, 3)
 
     for oid in obj_ids_all:
@@ -176,8 +176,8 @@ def export_per_person_meshes(
             v = verts[bi].detach().float().numpy()
             camt = pred_cam_t[bi].detach().float().cpu().numpy()
             v_cam = v + camt
-            if Rt_np is not None:
-                mesh_vertices = (v_cam * world_scale - t_np) @ Rt_np
+            if R_np is not None:
+                mesh_vertices = (v_cam * world_scale - t_np) @ R_np
             else:
                 mesh_vertices = v_cam
             verts_stacked[k] = mesh_vertices
