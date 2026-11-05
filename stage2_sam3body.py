@@ -48,6 +48,15 @@ from utils.zip_utils import make_extract_root, resolve_archive_dir, zip_and_remo
 
 PROGRESS_EVERY = 600  # frames between progress lines (one cosilab segment)
 
+def ignored_tracking_ids(frame_idx: int, segment_id_mappings) -> set:
+    """Tracking (mask pixel) IDs of the frame that Stage 1 mapped to a negative
+    real ID, i.e. people outside the study."""
+    seg = find_segment_for_frame(frame_idx, segment_id_mappings) if segment_id_mappings else None
+    if seg is None:
+        return set()
+    return {int(c) for c, a in seg["consecutive_to_actual"].items() if int(a) < 0}
+
+
 # ---------------------------------------------------------------------------
 # Camera intrinsics resolution
 # ---------------------------------------------------------------------------
@@ -423,9 +432,12 @@ def main() -> None:
         batch_images = valid_images[start:end]
         batch_masks = valid_masks[start:end]
 
+        # People Stage 1 mapped to a negative real ID are outside the study: not sent to the model
+        ignore_ids = [ignored_tracking_ids(int(os.path.basename(p)[:-4]), segment_id_mappings)
+                      for p in batch_images]
         outputs, id_batch, empty_frame_list = process_image_with_mask(
             estimator, batch_images, batch_masks,
-            idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int,
+            idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int, ignore_ids=ignore_ids,
         )
 
         batch_mask_ids = set()
@@ -460,7 +472,8 @@ def main() -> None:
             if bi in empty_frame_list:
                 num_empty += 1
                 excluded = [
-                    {**p, "reason": "margin_filtered"} for p in people_in_mask
+                    {**p, "reason": "negative_id" if p["real_id"] < 0 else "margin_filtered"}
+                    for p in people_in_mask
                 ]
                 valid_frames.append({
                     "frame": frame_name,
@@ -506,7 +519,7 @@ def main() -> None:
             sent_tracking_ids = set(ids if ids is not None else [])
             
             margin_filtered = [
-                {**p, "reason": "margin_filtered"}
+                {**p, "reason": "negative_id" if p["real_id"] < 0 else "margin_filtered"}
                 for p in people_in_mask
                 if p["tracking_id"] not in sent_tracking_ids
             ]

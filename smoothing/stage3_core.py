@@ -1,4 +1,9 @@
-"""Stacking of Stage 2's per-frame raw params into (frames x people) tensors."""
+"""Stacking of Stage 2's per-frame raw params into (frames x people) tensors.
+
+People with a negative real ID are left out: Stage 1's ID mapping marks people
+outside the study with -1, -2, ... (Stage 2 runs from before skipping them still
+have their params).
+"""
 
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ def stack_frames_to_tensors(
             if p is None:
                 continue
             oid = p.get("obj_id", None)
-            if oid is not None:
+            if oid is not None and int(oid) >= 0:
                 obj_set.add(int(oid))
     obj_ids_all = sorted(obj_set)
     N = len(obj_ids_all)
@@ -42,7 +47,7 @@ def stack_frames_to_tensors(
                 continue
             oid = int(p.get("obj_id"))
             si = slot_of.get(oid, None)
-            if si is None:
+            if si is None:  # negative ID
                 continue
             slots[si] = oid
             vis_flags[oid][ti] = 1
@@ -77,8 +82,9 @@ def stack_frames_to_tensors(
 
     for ti, fr in enumerate(frames):
         for p in fr.get("people", []):
-            oid = int(p.get("obj_id"))
-            si = slot_of[oid]
+            si = slot_of.get(int(p.get("obj_id")))
+            if si is None:
+                continue
             bi = ti * N + si
             for k in ["global_rot", "body_pose", "hand", "scale", "shape", "face", "pred_cam_t"]:
                 if k not in mhr:

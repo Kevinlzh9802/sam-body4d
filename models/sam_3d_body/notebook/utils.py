@@ -293,9 +293,12 @@ def display_results_grid(
     plt.show()
 
 
-def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int):
+def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int, ignore_ids=None):
     """
     Process image with external mask input.
+
+    ignore_ids: optional per-frame sets of mask IDs to leave out (e.g. people
+    outside the study); a frame with only those is treated as empty.
 
     Note: The refactored code requires bboxes to be provided along with masks.
     This function automatically computes bboxes from the mask.
@@ -312,6 +315,8 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
         mask = np.array(Image.open(mask_path[i]).convert('P'))
         obj_ids = np.unique(mask)
         obj_ids = obj_ids[obj_ids != 0].astype(int).tolist()
+        if ignore_ids is not None:
+            obj_ids = [o for o in obj_ids if o not in ignore_ids[i]]
 
         mask_list = []
         bbox_list = []
