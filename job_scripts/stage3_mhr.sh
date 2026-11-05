@@ -1,15 +1,18 @@
 #!/bin/bash
-# Stage 3: raw MHR params -> smoothed, mask-aligned, grounded meshes (stage3_mhr.py)
-# -> $SMOOTH_DIR/<seq>/<label>/meshes_4d_individual/
+# Stage 3, height option: raw MHR params -> smoothed, mask-aligned, grounded
+# meshes (stage3_mhr.py) -> $SMOOTH_DIR/<seq>/stage3_height/meshes_4d_individual/
 #
 # Steps (stage3_mhr.py, one person at a time): temporal smoothing -> MHR forward ->
-# mask reprojection -> ground (only with extrinsics: each person scaled about the
-# camera centre + shifted along the viewing ray so the feet are on the floor,
-# the image stays put) -> export (world coordinates with extrinsics, else camera).
+# mask reprojection -> ground (each person scaled about the camera centre +
+# shifted along the viewing ray so the feet are on the floor of the extrinsics,
+# the image stays put) -> export in world coordinates.
+# The floor comes from the camera's extrinsics JSON: for cosilab an assumed
+# height of cam01/cam06 (scripts/make_ground_extrinsics.py --height 3.5). The
+# multi-view option estimates the floor instead: job_scripts/stage3_multiview.sh.
 #
 # Needs $RAW_DIR/<seq>/raw_mhr.pt (Stage 2), $STAGE1_DIR/<seq>/masks.zip and
-# images.zip (Stage 1), the sequence's intrinsics JSON and, if available, its
-# extrinsics JSON (required for conflab; cosilab: scripts/make_ground_extrinsics.py).
+# images.zip (Stage 1), the sequence's intrinsics JSON and its extrinsics JSON
+# (not needed with -no-ground / -camera).
 # All three dirs are <dataset>/bbox_kp/ except cosilab on DAIC (see lib/dataset.sh),
 # where the Stage 1 folder is only read.
 #
@@ -20,6 +23,7 @@
 #   bash job_scripts/stage3_mhr.sh cam06_batch01
 #   bash job_scripts/stage3_mhr.sh -all cam06
 #   bash job_scripts/stage3_mhr.sh -no-ground cam06_batch01     # -> <seq>/stage3_noground
+#   bash job_scripts/stage3_mhr.sh -camera cam06_batch01        # -> <seq>/stage3_camera
 #   bash job_scripts/stage3_mhr.sh -dataset conflab 428
 #
 # Options:
@@ -28,8 +32,12 @@
 #   -sigma <frames>              smoothing width (default: stage3_mhr.py's)
 #   -no-smooth | -no-mask | -no-ground   leave a step out (to compare)
 #   -camera-space                export in camera space even with extrinsics
-#   -label <name>                output folder name (default: stage3, plus _no<step>
-#                                for each step left out, plus _cam for -camera-space)
+#   -camera                      = -no-ground -camera-space, into stage3_camera: the
+#                                per-camera input of the multi-view option (its
+#                                launcher makes these itself if missing)
+#   -label <name>                output folder name (default: stage3_height, or
+#                                stage3_noground / stage3_camera; plus _s<sigma> and
+#                                _no<step> for the other options, _cam for -camera-space)
 #   -sbatch "<flags>"            extra sbatch flags
 set -euo pipefail
 
@@ -45,6 +53,8 @@ ORIG_ARGS=("$@")
 STAGE3_ARGS=()
 LABEL=""
 SUFFIX=""
+BASE=stage3_height
+NO_GROUND=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,8 +62,9 @@ while [[ $# -gt 0 ]]; do
                         STAGE3_ARGS+=(--smooth-sigma "$2"); SUFFIX+="_s$2"; shift 2 ;;
     -no-smooth)         STAGE3_ARGS+=(--no-smooth); SUFFIX+="_nosmooth"; shift ;;
     -no-mask)           STAGE3_ARGS+=(--no-mask-reproj); SUFFIX+="_nomask"; shift ;;
-    -no-ground)         STAGE3_ARGS+=(--no-ground); SUFFIX+="_noground"; shift ;;
+    -no-ground)         STAGE3_ARGS+=(--no-ground); BASE=stage3_noground; NO_GROUND=1; shift ;;
     -camera-space)      STAGE3_ARGS+=(--export-camera-space); SUFFIX+="_cam"; shift ;;
+    -camera)            STAGE3_ARGS+=(--no-ground --export-camera-space); BASE=stage3_camera; NO_GROUND=1; shift ;;
     -label|--label)     [ $# -ge 2 ] || die "$1 needs a value"; LABEL="$2"; shift 2 ;;
     -segment|-simple|--segment|--simple)
       die "$1 was removed: Stage 3 is one pipeline now (stage3_mhr.py), see -h" ;;
@@ -63,7 +74,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-LABEL="${LABEL:-stage3$SUFFIX}"
+[ "$BASE" != stage3_camera ] || SUFFIX="${SUFFIX//_cam/}"
+LABEL="${LABEL:-$BASE$SUFFIX}"
 
 STAGE3_SCRIPT="stage3_mhr.py"
 # CPU job (lib/slurm.sh); the stage 3 scripts fall back to --device cpu
@@ -112,13 +124,14 @@ for seq in "${SEQS[@]}"; do
   if [ -f "$extrinsics" ]; then
     EXTRINSICS_ARGS=(--extrinsics-json "$(host_to_container "$extrinsics")")
     echo "[INFO] extrinsics-json=$extrinsics"
-  elif [ "$EXTRINSICS_REQUIRED" = 1 ]; then
-    echo "[WARN] Extrinsics not found: $extrinsics. Skipping folder $seq." >&2
+  elif [ "$EXTRINSICS_REQUIRED" = 1 ] || [ "$NO_GROUND" = 0 ]; then
+    echo "[WARN] Extrinsics not found: $extrinsics (the height option needs them; -no-ground or" \
+         "-camera export in camera space without). Skipping folder $seq." >&2
     failed=$((failed + 1))
     echo ""
     continue
   else
-    echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export, no ground step"
+    echo "[INFO] extrinsics-json=(not available: $extrinsics) -> camera-space export"
   fi
 
   # One output folder per label, so variants don't overwrite each other

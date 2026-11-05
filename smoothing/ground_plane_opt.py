@@ -130,6 +130,7 @@ def optimize_ground_ray_scale(
     t0: torch.Tensor,             # (P,3) pred_cam_t of those frames
     frame_numbers: torch.Tensor,  # (P,) their frame numbers (smoothness only across consecutive ones)
     cfg: GroundOptConfig,
+    scale: Optional[float] = None,  # fixed s (e.g. from multi-view triangulation); None = optimize it
 ) -> Tuple[torch.Tensor, float, Dict[str, float]]:
     """
     Ground constraint that keeps the person where they are in the image.
@@ -143,6 +144,7 @@ def optimize_ground_ray_scale(
            size by k_t, not the position), for per-frame floor contact.
     Losses: lowest foot point on z=0 (Huber), prior + velocity + acceleration
     on the ray shift, the latter two across consecutive frames only.
+    With ``scale`` given, s stays fixed and only the per-frame shift is fitted.
 
     Returns pred_cam_t (P,3) = s (1 + k) t0, s (the caller must multiply the
     person's local vertices/keypoints by it) and metrics.
@@ -169,15 +171,18 @@ def optimize_ground_ray_scale(
         return (cam * ws) @ up - z_off               # (P,8)
 
     # Start from the median per-frame scale that puts the lowest foot on the floor
-    with torch.no_grad():
-        a = ((feet + tp[:, None, :]) * ws @ up).min(dim=1).values  # lowest foot z at s=1 is a - z_off
-        s_t = z_off / a
-        s_t = s_t[torch.isfinite(s_t) & (s_t > 0)]
-        s0 = float(s_t.median().clamp(0.5, 2.0)) if len(s_t) else 1.0
+    if scale is None:
+        with torch.no_grad():
+            a = ((feet + tp[:, None, :]) * ws @ up).min(dim=1).values  # lowest foot z at s=1 is a - z_off
+            s_t = z_off / a
+            s_t = s_t[torch.isfinite(s_t) & (s_t > 0)]
+            s0 = float(s_t.median().clamp(0.5, 2.0)) if len(s_t) else 1.0
+    else:
+        s0 = float(scale)
 
-    log_s = torch.tensor(float(np.log(s0)), device=device, requires_grad=True)
+    log_s = torch.tensor(float(np.log(s0)), device=device, requires_grad=scale is None)
     k = torch.zeros(len(tp), device=device, requires_grad=True)
-    opt = torch.optim.Adam([log_s, k], lr=float(cfg.ray_lr))
+    opt = torch.optim.Adam([log_s, k] if scale is None else [k], lr=float(cfg.ray_lr))
     zero = torch.zeros((), device=device)
 
     for _ in range(int(cfg.iters)):

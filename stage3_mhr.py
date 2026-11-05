@@ -13,9 +13,11 @@ whole frames x people grid):
                 centre + a small per-frame shift along the viewing ray, so the
                 lowest foot is on the floor z=0 while the projection stays put
                 (smoothing/ground_plane_opt.py)
-  5. export     meshes_4d_individual/<pid>.npz (``vertices`` (T_p, V, 3) float32,
-                ``faces``, ``frame_names``), in world coordinates (world units,
-                cm by default) with extrinsics, else camera space (m)
+  5. export     meshes_4d_individual/<pid>.npz (``vertices`` (T_p, V, 3) and mhr70
+                ``keypoints`` (T_p, 70, 3) float32, ``faces``, ``frame_names``),
+                in world coordinates (world units, cm by default) with extrinsics,
+                else camera space (m); ``cam_t`` (T_p, 3) is the camera-space
+                translation (m) of the person's local mesh
 
 Steps 1, 3 and 4 can be switched off (--no-smooth, --no-mask-reproj, --no-ground)
 to compare. Plots: diagnostics/ (raw pred_cam_t), reproj_overlay/ (final meshes
@@ -294,8 +296,11 @@ def main() -> None:
             v_world = (v_cam.numpy() * ws - t_np) @ R_np
             z = v_world[..., 2]
             heights[oid] = (idx, z.max(axis=1) - z.min(axis=1))
+        k_cam = (j3d + t_cpu[:, None, :]).numpy()
         v_out = v_world if export_world else v_cam.numpy()
+        k_out = (k_cam * ws - t_np) @ R_np if export_world else k_cam
         np.savez_compressed(os.path.join(mesh_dir, f"{oid}.npz"), vertices=v_out.astype(np.float32, copy=False),
+                            keypoints=k_out.astype(np.float32, copy=False), cam_t=t_cpu.numpy(),
                             faces=faces_np, frame_names=np.array([frame_names[t] for t in idx]))
 
         cam_t[idx_t, si] = t_cpu

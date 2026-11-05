@@ -14,7 +14,9 @@
 # Output: experiments/stage3_local/<seq>/<segment>/
 #   raw_mhr.pt          the segment's raw params
 #   <label>/            stage3_mhr.py output (camera space, so it compares with the
-#                       jitter variants), incl. diagnostics/; label default: stage3
+#                       jitter variants), incl. diagnostics/ and reproj_overlay/;
+#                       label default: stage3_height with extrinsics (height option),
+#                       else stage3_noground; stage3_camera with --camera
 #   jitter/             jitter_report.json from scripts/jitter_check.py
 #
 # Usage:
@@ -22,7 +24,10 @@
 #   bash scripts/local_stage3.sh cam06_batch01 10 --cpu          # no GPU
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 --no-stage3 # jitter attribution only
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 --label noground --stage3-args "--no-ground"
+#   bash scripts/local_stage3.sh cam06_batch01 seg010 --stage3-args "--overlay-interval 20"
+#   bash scripts/local_stage3.sh cam06_batch01 seg010 --camera --no-jitter  # multi-view input
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 -- --stage3-sigmas 2 4  # extra jitter_check.py args
+# The multi-view option over several cameras: scripts/local_stage3_multiview.sh
 # Env: SB4D_SIF (default apptainer/body4d_osmesa_cu128.sif)
 set -euo pipefail
 
@@ -33,13 +38,17 @@ cd "$REPO"
 SEQ="$1"; SEG="$2"; shift 2
 DEVICE=cuda
 RUN_STAGE3=1
-LABEL=stage3
+RUN_JITTER=1
+LABEL=""
 S3_EXTRA=()
+S3_MODE=()
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cpu)       DEVICE=cpu; shift ;;
     --no-stage3) RUN_STAGE3=0; shift ;;
+    --no-jitter) RUN_JITTER=0; shift ;;
+    --camera)    S3_MODE=(--no-ground); LABEL="${LABEL:-stage3_camera}"; shift ;;
     --label)     LABEL="$2"; shift 2 ;;
     --stage3-args) read -r -a S3_EXTRA <<< "$2"; shift 2 ;;
     --)          shift; EXTRA=("$@"); break ;;
@@ -59,6 +68,9 @@ STAGE1="$E/sam3_output/$SEQ"
 INTR="$E/intrinsics/parameters-camera-$CAM.json"
 EXTR="$E/extrinsics/extrinsic_cam_$CAM.json"
 OUT="$E/stage3_local/$SEQ/$SEG_KEY"
+if [ -z "$LABEL" ]; then
+  if [ -f "$EXTR" ]; then LABEL=stage3_height; else LABEL=stage3_noground; fi
+fi
 SIF="${SB4D_SIF:-apptainer/body4d_osmesa_cu128.sif}"
 
 # Raw source: the per-segment file if there is one, else the whole raw_mhr.pt
@@ -102,12 +114,14 @@ if [ "$RUN_STAGE3" = 1 ]; then
   # Camera-space export so the jitter numbers are comparable (m, same frame as the raw variants)
   run stage3_mhr.py --raw "$OUT/raw_mhr.pt" --out "$OUT/$LABEL" --input-dir "$STAGE1" \
     --camera-intrinsics-json "$INTR" --config "$CFG" --device "$DEVICE" --export-camera-space \
-    ${GROUND[@]+"${GROUND[@]}"} ${S3_EXTRA[@]+"${S3_EXTRA[@]}"}
+    ${GROUND[@]+"${GROUND[@]}"} ${S3_MODE[@]+"${S3_MODE[@]}"} ${S3_EXTRA[@]+"${S3_EXTRA[@]}"}
   S3_ARGS=(--stage3-dir "$LABEL=$OUT/$LABEL")
 fi
 
+if [ "$RUN_JITTER" = 1 ]; then
 mkdir -p "$OUT/jitter"
 run scripts/jitter_check.py --raw "$OUT/raw_mhr.pt" --config "$CFG" --device "$DEVICE" --out "$OUT/jitter" \
   ${S3_ARGS[@]+"${S3_ARGS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} | tee "$OUT/jitter/jitter_report.txt"
+fi
 
 [ "$RUN_STAGE3" = 0 ] || echo "[INFO] View the meshes: python scripts/view_stage3.py $OUT/$LABEL  (needs viser)"

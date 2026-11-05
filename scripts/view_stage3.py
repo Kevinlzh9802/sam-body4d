@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Browser viewer (viser) for Stage 3 meshes: plays back every person of one or
-more stage3_mhr.py outputs (meshes_4d_individual/<id>.npz).
+more stage3_mhr.py / stage3_multiview.py outputs (meshes_4d_individual/<id>.npz).
 
 Camera-space outputs (--export-camera-space) of several cameras of one rig are
 placed with the rig's multi-camera calibration (libCalib JSON
@@ -276,8 +276,11 @@ def main() -> None:
         else:
             scale = float(opts.get("world_scale", 100.0))
             path = args.calib or (find_rig_calibration(args.calib_dir, cam_num) if cam_num is not None else None)
+            # Multi-view outputs carry the extrinsics of their own (estimated) floor
+            own = os.path.join(out_dir, "extrinsics")
+            extr_dir = own if os.path.isdir(own) else args.calib_dir
             if path and world_rig is None:
-                world_rig = world_cameras(load_rig_calibration(path), args.calib_dir, scale)
+                world_rig = world_cameras(load_rig_calibration(path), extr_dir, scale)
             shown_cams.add(cam_name)
         loaded = load_people(out_dir, args.frames, args.stride, set(args.ids or []), to_rig, scale, cam_name)
         n_frames = sum(len(p.frames) for p in loaded)
