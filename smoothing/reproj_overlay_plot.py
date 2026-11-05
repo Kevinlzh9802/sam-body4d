@@ -1,5 +1,6 @@
 """
-Overlay projected 3D meshes / keypoints on original 2D images + detected masks.
+Overlay projected 3D meshes (filled silhouette + body skeleton) on the Stage 1
+frames, with the Stage 1 masks outlined in the same colour per person.
 
 Produces diagnostic images at a configurable frame interval, together with
 per-frame reprojection error saved as JSON.
@@ -33,6 +34,21 @@ _PAL = [
 
 def _bgr(rgb: Tuple[int, int, int]) -> Tuple[int, int, int]:
     return (rgb[2], rgb[1], rgb[0])
+
+
+# Body skeleton drawn on the overlays (mhr70 indices): the joints that set the
+# mesh's pose. Hands, face and the extra arm landmarks are left out.
+NOSE, NECK = 0, 69
+L_SHO, R_SHO, L_ELB, R_ELB, L_WRI, R_WRI = 5, 6, 7, 8, 62, 41
+L_HIP, R_HIP, L_KNE, R_KNE, L_ANK, R_ANK, L_TOE, R_TOE = 9, 10, 11, 12, 13, 14, 15, 18
+SKELETON = (
+    (NOSE, NECK), (NECK, L_SHO), (NECK, R_SHO),
+    (L_SHO, L_ELB), (L_ELB, L_WRI), (R_SHO, R_ELB), (R_ELB, R_WRI),
+    (L_SHO, L_HIP), (R_SHO, R_HIP), (L_HIP, R_HIP),
+    (L_HIP, L_KNE), (L_KNE, L_ANK), (L_ANK, L_TOE),
+    (R_HIP, R_KNE), (R_KNE, R_ANK), (R_ANK, R_TOE),
+)
+PRIMARY_KPS = tuple(sorted({k for bone in SKELETON for k in bone}))
 
 
 # --------------------------------------------------------------------------- #
@@ -135,15 +151,19 @@ def render_overlay_frame(
     canvas = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     frame_errors: Dict[str, Any] = {}
 
-    # ---- 1. detected-mask contours (thick, per-person colour) ------------- #
+    # ---- 1. detected-mask contours (thick, in the colour of the person's mesh;
+    #         grey for masks without a mesh) ----------------------------------- #
     if mask is not None:
+        mask_col = {}
+        for pidx, oid in enumerate(sorted(persons)):
+            mid = oid_to_mask_id.get(oid, oid) if oid_to_mask_id else oid
+            mask_col[int(mid)] = _bgr(_PAL[pidx % len(_PAL)])
         for uid in np.unique(mask):
             if uid == 0:
                 continue
-            ci = (int(uid) - 1) % len(_PAL)
             bm = (mask == uid).astype(np.uint8)
             cnts, _ = cv2.findContours(bm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(canvas, cnts, -1, _bgr(_PAL[ci]), 2)
+            cv2.drawContours(canvas, cnts, -1, mask_col.get(int(uid), (160, 160, 160)), 2)
 
     # ---- 2. mesh silhouettes (all persons → one overlay, single blend) ---- #
     overlay = np.zeros_like(canvas)
@@ -186,14 +206,18 @@ def render_overlay_frame(
         col = _bgr(_PAL[ci])
 
         kps = pd.get("kps_cam")
-        if kps is not None:
+        if kps is not None and len(kps) > max(PRIMARY_KPS):
             uv_kps = _project(K, kps)
             ok = kps[:, 2] > 0.01
-            for ki in range(len(uv_kps)):
+            for a, b in SKELETON:
+                if ok[a] and ok[b]:
+                    cv2.line(canvas, tuple(uv_kps[a].astype(int)), tuple(uv_kps[b].astype(int)),
+                             col, 2, cv2.LINE_AA)
+            for ki in PRIMARY_KPS:
                 if ok[ki]:
                     pt = (int(uv_kps[ki, 0]), int(uv_kps[ki, 1]))
-                    cv2.circle(canvas, pt, 4, col, -1)
-                    cv2.circle(canvas, pt, 4, (255, 255, 255), 1)
+                    cv2.circle(canvas, pt, 3, col, -1)
+                    cv2.circle(canvas, pt, 3, (255, 255, 255), 1)
 
         obs_idx = pd.get("obs_kp_idx")
         obs_xy = pd.get("obs_xy")
@@ -253,15 +277,16 @@ def render_overlay_frame(
     # ---- 5. legend -------------------------------------------------------- #
     y0 = 50
     cv2.circle(canvas, (20, y0), 4, (200, 200, 200), -1)
-    cv2.putText(canvas, "Projected kp", (32, y0 + 4),
+    cv2.putText(canvas, "Mesh body joints", (32, y0 + 4),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-    cv2.drawMarker(canvas, (20, y0 + 22), (255, 255, 255),
-                   cv2.MARKER_TILTED_CROSS, 8, 2)
-    cv2.putText(canvas, "Observed kp", (32, y0 + 26),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-    cv2.line(canvas, (12, y0 + 44), (28, y0 + 44), (0, 0, 255), 1)
-    cv2.putText(canvas, "Reproj error", (32, y0 + 48),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    if errs:  # observed 2D keypoints were given
+        cv2.drawMarker(canvas, (20, y0 + 22), (255, 255, 255),
+                       cv2.MARKER_TILTED_CROSS, 8, 2)
+        cv2.putText(canvas, "Observed kp", (32, y0 + 26),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        cv2.line(canvas, (12, y0 + 44), (28, y0 + 44), (0, 0, 255), 1)
+        cv2.putText(canvas, "Reproj error", (32, y0 + 48),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
     return canvas, frame_errors
 

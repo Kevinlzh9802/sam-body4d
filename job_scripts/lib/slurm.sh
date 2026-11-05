@@ -96,7 +96,8 @@ check_kerberos() {
   command -v klist >/dev/null 2>&1 || return 0
   klist -s || die "No valid Kerberos ticket. Run kinit (NetID password), then submit again."
   renew="$(klist | awk '/renew until/ { sub(/.*renew until */, ""); print; exit }')"
-  if [ -n "$renew" ] && renew_s="$(date -d "$renew" +%s 2>/dev/null)"; then
+  [ -n "$renew" ] || die "Kerberos ticket is not renewable (no 'renew until' in klist), so jobs lose storage access within 10 h. Run kinit (NetID password), then submit again."
+  if renew_s="$(date -d "$renew" +%s 2>/dev/null)"; then
     left=$(( renew_s - $(date +%s) ))
     if (( left < time_s + 86400 )); then
       die "Kerberos ticket is renewable only until $renew; the job may need $((time_s / 3600)) h + queueing. Run kinit (NetID password) for a new 7-day ticket, then submit again."

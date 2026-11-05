@@ -18,8 +18,9 @@ whole frames x people grid):
                 cm by default) with extrinsics, else camera space (m)
 
 Steps 1, 3 and 4 can be switched off (--no-smooth, --no-mask-reproj, --no-ground)
-to compare. Plots: diagnostics/ (raw pred_cam_t), reproj_overlay/ (every 100th
-frame), and with extrinsics the world-space height / feet / ground plots.
+to compare. Plots: diagnostics/ (raw pred_cam_t), reproj_overlay/ (final meshes
+and body skeletons on the Stage 1 frames, every --overlay-interval frames, 100 by
+default), and with extrinsics the world-space height / feet / ground plots.
 """
 
 from __future__ import annotations
@@ -125,6 +126,8 @@ def main() -> None:
     ap.add_argument("--export-camera-space", action="store_true", help="Export camera space even with extrinsics")
     ap.add_argument("--world-scale", type=float, default=100.0, help="World units per metre (100 = cm)")
     ap.add_argument("--mhr-batch-size", type=int, default=256)
+    ap.add_argument("--overlay-interval", type=int, default=OVERLAY_INTERVAL,
+                    help="Frames between reprojection overlays (reproj_overlay/); 0 = none")
     # 1. smoothing
     ap.add_argument("--no-smooth", action="store_true")
     ap.add_argument("--smooth-sigma-pose", type=float, default=SmoothConfig.sigma_pose,
@@ -298,7 +301,7 @@ def main() -> None:
         cam_t[idx_t, si] = t_cpu
         j3d_all[idx_t, si] = j3d
         for i, t in enumerate(idx):
-            if t % OVERLAY_INTERVAL == 0:
+            if args.overlay_interval > 0 and t % args.overlay_interval == 0:
                 overlay_verts.rows[int(t) * N + si] = verts[i].clone()
         del verts, v_cam, j3d
     del estimator, head_pose, masks
@@ -340,18 +343,18 @@ def main() -> None:
 
     input_dir = args.input_dir or meta.get("input_dir", "")
     images_dir = resolve_archive_dir(os.path.join(input_dir, "images"), extract_root) if input_dir else ""
-    if images_dir and os.path.isdir(images_dir):
+    if args.overlay_interval > 0 and images_dir and os.path.isdir(images_dir):
         try:
             plot_reproj_overlays_from_stage3(
                 verts=overlay_verts, keypoints3d_local=j3d_flat, pred_cam_t=cam_t_flat, faces=faces_np,
                 K=K_np, images_dir=images_dir, masks_dir=mask_dir if os.path.isdir(mask_dir) else None,
                 T=T, N=N, obj_ids_all=obj_ids, frame_obj_ids_slots=slots, frame_names=frame_names,
-                output_dir=os.path.join(out_dir, "reproj_overlay"), frame_interval=OVERLAY_INTERVAL,
+                output_dir=os.path.join(out_dir, "reproj_overlay"), frame_interval=args.overlay_interval,
                 segment_id_mappings=segment_id_mappings,
             )
         except Exception as e:
             print(f"[WARN] Reproj overlays failed: {e}")
-    else:
+    elif args.overlay_interval > 0:
         print(f"[INFO] Skipping reproj overlay: images dir not found ({images_dir!r})")
 
     # Archives extracted in place next to the raw file (a temp extract_root is removed at exit)
