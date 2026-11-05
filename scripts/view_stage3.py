@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Browser viewer (viser) for Stage 3 meshes: plays back every person of one or
-more stage3_mhr_*.py outputs (meshes_4d_individual/<id>.npz).
+more stage3_mhr.py outputs (meshes_4d_individual/<id>.npz).
 
 Camera-space outputs (--export-camera-space) of several cameras of one rig are
 placed with the rig's multi-camera calibration (libCalib JSON
@@ -17,7 +17,7 @@ straight from the npz stream, so --frames limits memory on full sequences:
 about 0.22 MB per person per shown frame.
 
 Usage:
-  python scripts/view_stage3.py experiments/stage3_local/cam06_batch01/cam06_seg010/stage3_full
+  python scripts/view_stage3.py experiments/stage3_local/cam06_batch01/cam06_seg010/stage3
   python scripts/view_stage3.py <cam06 out> <cam08 out> --frames 5400 6000 --stride 2
 Open http://localhost:8080. On a cluster node, forward the port first:
   ssh -L 8080:localhost:8080 <login node>   (then run there, or hop on to the node)

@@ -180,6 +180,8 @@ run_in_container() {
   cmd+=(
     --env "PYTHONPATH=$project/models/sam3:$project:${PYTHONPATH:-}"
     --env PYOPENGL_PLATFORM=osmesa
+    # Print as it happens: a killed job otherwise loses its last ~8 KB of output
+    --env PYTHONUNBUFFERED=1
     "$SIF_PATH"
     python "$project/$script" "$@")
   if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then

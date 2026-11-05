@@ -66,6 +66,47 @@ sbatch_flags() {
   fi
 }
 
+# Slurm --time value ([D-]HH:MM:SS, [D-]HH:MM, MM:SS, MM, D-HH) -> seconds
+time_to_seconds() {
+  local t="$1" d=0 h=0 m=0 s=0 parts
+  if [[ "$t" == *-* ]]; then
+    d="${t%%-*}"; t="${t#*-}"
+    IFS=: read -r -a parts <<< "$t"
+    h=${parts[0]}; m=${parts[1]:-0}; s=${parts[2]:-0}
+  else
+    IFS=: read -r -a parts <<< "$t"
+    case ${#parts[@]} in
+      3) h=${parts[0]}; m=${parts[1]}; s=${parts[2]} ;;
+      2) m=${parts[0]}; s=${parts[1]} ;;
+      *) m=${parts[0]} ;;
+    esac
+  fi
+  echo $(( ((10#$d * 24 + 10#$h) * 60 + 10#$m) * 60 + 10#$s ))
+}
+
+# DAIC: jobs reach /tudelft.net and ~/linuxhome (data, outputs and the SLURM log
+# files) only through the Kerberos ticket that AUKS takes at submission and
+# renews while the job is queued or running, up to the ticket's "renew until"
+# time. Without a valid ticket a job fails within seconds and leaves no log
+# files; once the renewal runs out, it dies mid-run without a trace (its log
+# files are on that storage too). https://doc.daic.tudelft.nl/docs/storage/storage/
+# Refuses to submit unless the ticket is renewable for the job's time limit + 1 day of queueing.
+check_kerberos() {
+  local time_s="$1" renew renew_s left
+  command -v klist >/dev/null 2>&1 || return 0
+  klist -s || die "No valid Kerberos ticket. Run kinit (NetID password), then submit again."
+  renew="$(klist | awk '/renew until/ { sub(/.*renew until */, ""); print; exit }')"
+  if [ -n "$renew" ] && renew_s="$(date -d "$renew" +%s 2>/dev/null)"; then
+    left=$(( renew_s - $(date +%s) ))
+    if (( left < time_s + 86400 )); then
+      die "Kerberos ticket is renewable only until $renew; the job may need $((time_s / 3600)) h + queueing. Run kinit (NetID password) for a new 7-day ticket, then submit again."
+    fi
+    echo "[INFO] Kerberos ticket renewable until $renew"
+  else
+    echo "[WARN] Could not read the Kerberos 'renew until' time; check klist (jobs lose storage access when it passes)" >&2
+  fi
+}
+
 # On a login node: submit <script> with <stage> flags and the original args,
 # then exit. Inside a SLURM job (or an interactive allocation)
 # it returns so the caller does the work.
@@ -74,7 +115,16 @@ sbatch_flags() {
 self_submit() {
   local stage="$1" script="$2"
   shift 2
-  [ -n "${SLURM_JOB_ID:-}" ] && return 0
+  if [ -n "${SLURM_JOB_ID:-}" ]; then
+    echo "[INFO] Job $SLURM_JOB_ID on $(hostname -s), started $(date '+%F %T')"
+    if [ "$CLUSTER" = daic ] && command -v klist >/dev/null 2>&1; then
+      local ticket
+      ticket="$(klist 2>/dev/null | awk '/krbtgt/ { e = $3 " " $4 } /renew until/ { sub(/.*renew until */, ""); r = $0 }
+                                     END { if (e != "") print "expires " e ", renewable until " r }' || true)"
+      echo "[INFO] Kerberos ticket: ${ticket:-none (network storage will fail)}"
+    fi
+    return 0
+  fi
 
   sbatch_flags "$stage"
 
@@ -88,6 +138,14 @@ self_submit() {
   if [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
     echo "[DRY-RUN] $(printf '%q ' "${cmd[@]}")"
     return 0
+  fi
+  if [ "$CLUSTER" = daic ]; then
+    # The last --time wins (-sbatch flags come after the stage's)
+    local f time_limit=""
+    for f in "${SBATCH_FLAGS[@]}" ${extra[@]+"${extra[@]}"}; do
+      [[ "$f" == --time=* ]] && time_limit="${f#--time=}"
+    done
+    check_kerberos "$(time_to_seconds "$time_limit")"
   fi
   mkdir -p "$LOG_DIR"
   echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  Sequences: ${SEQS[*]}"

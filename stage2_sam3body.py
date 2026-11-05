@@ -46,6 +46,7 @@ from utils.merge_raw_mhr import (
 from utils.model_factory import build_sam3d_body_from_config
 from utils.zip_utils import make_extract_root, resolve_archive_dir, zip_and_remove_dir
 
+PROGRESS_EVERY = 600  # frames between progress lines (one cosilab segment)
 
 # ---------------------------------------------------------------------------
 # Camera intrinsics resolution
@@ -416,6 +417,7 @@ def main() -> None:
     all_output_ids: set = set()
     batch_size = int(args.batch_size)
 
+    t_loop = time.time()
     for start in range(0, n_valid, batch_size):
         end = min(n_valid, start + batch_size)
         batch_images = valid_images[start:end]
@@ -435,6 +437,11 @@ def main() -> None:
             print(f"[DEBUG] First batch: id_batch={len(id_batch)} frames, "
                   f"outputs={len(outputs)} frames, empty={empty_frame_list}")
             print(f"[DEBUG] First batch mask IDs: {sorted(batch_mask_ids)}")
+        if end // PROGRESS_EVERY > start // PROGRESS_EVERY or end == n_valid:
+            elapsed = time.time() - t_loop
+            eta = elapsed / end * (n_valid - end)
+            print(f"[INFO] {end}/{n_valid} frames, {elapsed / 60:.0f} min, {end / elapsed:.2f} frames/s, "
+                  f"~{eta / 60:.0f} min left")
 
         num_empty = 0
         for bi in range(len(batch_images)):
