@@ -65,6 +65,23 @@ load_dataset() {
   fi
 }
 
+# cosilab recording sessions (two separate recordings). Within a session and
+# batch, the same frame number is the same moment in every camera.
+COSILAB_SESSIONS=([1]="06 07 08 09 10" [2]="01 02 03 04 05")
+
+# The rig calibration (parameters-camera-AA-to-BB.json in <dir>) that has camera
+# <MM>; prints nothing if none has it (cam05 for now).
+rig_calibration_for_cam() {
+  local dir="$1" cam=$((10#$2)) f
+  for f in "$dir"/parameters-camera-*-to-*.json; do
+    [[ "$(basename "$f")" =~ camera-([0-9]{2})-to-([0-9]{2}) ]] || continue
+    if (( cam >= 10#${BASH_REMATCH[1]} && cam <= 10#${BASH_REMATCH[2]} )); then
+      echo "$f"
+      return 0
+    fi
+  done
+}
+
 # Two-digit camera number of a cosilab sequence (cam06_batch01 -> 06).
 seq_cam() {
   [[ "$1" =~ $SEQ_REGEX ]] && echo "${BASH_REMATCH[1]}"

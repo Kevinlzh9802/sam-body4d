@@ -1,7 +1,10 @@
 #!/bin/bash
 # Local Stage 3, multi-view option, on one 10 s segment of several cameras of one
-# rig (no SLURM): metric scale from triangulating the people across the cameras
-# and the floor from their feet, no assumed camera height (stage3_multiview.py).
+# recording session (no SLURM): metric scale from triangulating the people across
+# the cameras and the floor from their feet, no assumed camera height
+# (stage3_multiview.py). Sessions: 1 = cam06-10, 2 = cam01-05 (cam05 has no rig
+# calibration yet); frame numbers of one batch are the same moments only within
+# a session, so the cameras must all be from one session.
 #
 # Per camera, scripts/local_stage3.sh --camera makes the camera-space input
 # (experiments/stage3_local/<seq>/<segment>/stage3_camera, reused if present),
@@ -35,7 +38,17 @@ while [ $# -gt 0 ]; do
 done
 [ ${#CAMS[@]} -ge 2 ] || { echo "[ERROR] Needs at least two cameras" >&2; exit 2; }
 
-# The rig calibration that has all the cameras
+# Sessions (separate recordings; frame numbers match only within one):
+# session 1 = cam06-10, session 2 = cam01-05
+session_of() { if (( 10#$1 >= 6 && 10#$1 <= 10 )); then echo 1; elif (( 10#$1 >= 1 && 10#$1 <= 5 )); then echo 2; fi; }
+CAM_LIST="$(printf 'cam%s ' "${CAMS[@]}")"
+SESSION="$(session_of "${CAMS[0]}")"
+for c in "${CAMS[@]}"; do
+  [ "$(session_of "$c")" = "$SESSION" ] && [ -n "$SESSION" ] || {
+    echo "[ERROR] ${CAM_LIST% } are not all in one session (1 = cam06-10, 2 = cam01-05)" >&2; exit 1; }
+done
+
+# The session's rig calibration, which must have every camera (cam05 is in none yet)
 CALIB=""
 for f in experiments/extrinsics/parameters-camera-*-to-*.json; do
   [[ "$(basename "$f")" =~ camera-([0-9]{2})-to-([0-9]{2}) ]] || continue
@@ -45,7 +58,7 @@ for f in experiments/extrinsics/parameters-camera-*-to-*.json; do
   done
   [ "$ok" = 0 ] || CALIB="$f"
 done
-[ -n "$CALIB" ] || { echo "[ERROR] No rig calibration in experiments/extrinsics/ has cameras ${CAMS[*]}" >&2; exit 1; }
+[ -n "$CALIB" ] || { echo "[ERROR] No rig calibration in experiments/extrinsics/ has all of ${CAM_LIST% }" >&2; exit 1; }
 
 DIRS=()
 for c in "${CAMS[@]}"; do

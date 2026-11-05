@@ -1,13 +1,21 @@
 #!/bin/bash
 # Stage 3, multi-view option (cosilab): no assumed camera height. Metric scale
-# from triangulating each person across the cameras of a calibrated rig, the
-# floor from their feet (stage3_multiview.py)
-# -> $SMOOTH_DIR/<seq>/stage3_multiview/ for every camera of the rig.
+# from triangulating each person across the cameras of a recording session,
+# the floor from their feet (stage3_multiview.py)
+# -> $SMOOTH_DIR/<seq>/stage3_multiview/ for every camera taking part.
 #
-# Per batch and rig (parameters-camera-AA-to-BB.json in the extrinsics folder):
-#   1. every camera with Stage 2 output: stage3_mhr.py in camera space without
-#      the ground step -> <seq>/stage3_camera (reused if already there; the same
-#      as `stage3_mhr.sh -camera <seq>`, which can make them in parallel first)
+# cosilab sessions (lib/dataset.sh), two separate recordings: session 1 =
+# cam06-10, session 2 = cam01-05. Within a session and batch the same frame
+# number is the same moment in every camera, so cameras are only combined with
+# the other cameras of their session and batch. A camera takes part if it has
+# Stage 2 output and is in the session's rig calibration
+# (parameters-camera-AA-to-BB.json in the extrinsics folder; cam05 is not in
+# parameters-camera-01-to-04.json, so it is left out with a warning).
+#
+# Per batch and session:
+#   1. every camera taking part: stage3_mhr.py in camera space without the
+#      ground step -> <seq>/stage3_camera (reused if already there; the same as
+#      `stage3_mhr.sh -camera <seq>`, which can make them in parallel first)
 #   2. stage3_multiview.py over those cameras -> <seq>/stage3_multiview
 # The height option (job_scripts/stage3_mhr.sh -> <seq>/stage3_height) is separate.
 #
@@ -15,12 +23,12 @@
 # submits itself to SLURM (CPU job).
 #
 # Usage:
-#   bash job_scripts/stage3_multiview.sh -b 1              # batch 01, every rig
-#   bash job_scripts/stage3_multiview.sh -b 1-7 -rig 06-10
+#   bash job_scripts/stage3_multiview.sh -b 1                # batch 01, both sessions
+#   bash job_scripts/stage3_multiview.sh -b 1-7 -session 1   # cam06-10 only
 #
 # Options:
 #   -b <spec>                    batches: 1 | 1,3,5 | 3-5 | 1,3-5 (required)
-#   -rig <AA-BB>                 only this rig (default: every rig calibration found)
+#   -session <1|2>               only this session (default: both)
 #   -sigma <frames> | -no-smooth | -no-mask   step 1 options (folder names get
 #                                the same suffixes as stage3_mhr.sh's)
 #   -redo                        run step 1 again even if stage3_camera exists
@@ -38,7 +46,7 @@ source "$SB4D_CODE/job_scripts/lib/common.sh"
 ORIG_ARGS=("$@")
 STAGE3_ARGS=()
 SUFFIX=""
-RIG=""
+SESSION=""
 REDO=0
 
 while [[ $# -gt 0 ]]; do
@@ -47,7 +55,7 @@ while [[ $# -gt 0 ]]; do
                         STAGE3_ARGS+=(--smooth-sigma "$2"); SUFFIX+="_s$2"; shift 2 ;;
     -no-smooth)         STAGE3_ARGS+=(--no-smooth); SUFFIX+="_nosmooth"; shift ;;
     -no-mask)           STAGE3_ARGS+=(--no-mask-reproj); SUFFIX+="_nomask"; shift ;;
-    -rig|--rig)         [ $# -ge 2 ] || die "$1 needs a value"; RIG="$2"; shift 2 ;;
+    -session|--session) [ $# -ge 2 ] || die "$1 needs a value"; SESSION="$2"; shift 2 ;;
     -redo)              REDO=1; shift ;;
     *)
       parse_common_args "$@"
@@ -61,16 +69,14 @@ MV_LABEL="stage3_multiview$SUFFIX"
 load_dataset "$DATASET_ARG"
 [ "$DATASET" = cosilab ] || die "The multi-view option needs a calibrated camera rig (cosilab)"
 [ -n "$BATCH_SPEC" ] || die "-b <spec> is required (see -h)"
-[ -z "$CAM_NUM$ALL_PREFIX" ] && [ ${#POS_SEQS[@]} -eq 0 ] || die "Give batches with -b; the cameras come from the rig"
-[ -z "$RIG" ] || [[ "$RIG" =~ ^[0-9]{2}-[0-9]{2}$ ]] || die "-rig must look like 06-10, got: $RIG"
+[ -z "$CAM_NUM$ALL_PREFIX" ] && [ ${#POS_SEQS[@]} -eq 0 ] || die "Give batches with -b; the cameras come from the sessions"
+SESSIONS=("${!COSILAB_SESSIONS[@]}")
+if [ -n "$SESSION" ]; then
+  [ -n "${COSILAB_SESSIONS[$SESSION]+x}" ] || die "-session must be one of ${SESSIONS[*]}, got: $SESSION"
+  SESSIONS=("$SESSION")
+fi
 expand_batch_spec "$BATCH_SPEC"
-
 EXTR_DIR="$CAMERA_DIR/extrinsics"
-shopt -s nullglob
-RIG_FILES=("$EXTR_DIR"/parameters-camera-${RIG:-*-to-*}.json)
-shopt -u nullglob
-[ -n "$RIG" ] && RIG_FILES=("$EXTR_DIR/parameters-camera-${RIG/-/-to-}.json")
-[ ${#RIG_FILES[@]} -gt 0 ] && [ -f "${RIG_FILES[0]}" ] || die "No rig calibration (parameters-camera-AA-to-BB.json) in $EXTR_DIR"
 
 SEQS=()
 for bn in "${BATCH_NUMS[@]}"; do SEQS+=("$(printf 'batch%02d' "$bn")"); done
@@ -78,7 +84,7 @@ CONTAINER_GPU=0
 self_submit stage3_multiview "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
-echo "[INFO] Batches: ${SEQS[*]}  Rigs: ${RIG_FILES[*]##*/}"
+echo "[INFO] Batches: ${SEQS[*]}  Sessions: ${SESSIONS[*]}  Rig calibrations: $EXTR_DIR"
 echo "[INFO] Step 1: stage3_mhr.py --no-ground --export-camera-space ${STAGE3_ARGS[*]} -> <seq>/$CAMERA_LABEL"
 echo "[INFO] Step 2: stage3_multiview.py -> <seq>/$MV_LABEL"
 echo ""
@@ -86,19 +92,29 @@ echo ""
 failed=0
 groups=0
 for bn in "${BATCH_NUMS[@]}"; do
-  for calib in "${RIG_FILES[@]}"; do
-    [[ "$(basename "$calib")" =~ camera-([0-9]{2})-to-([0-9]{2}) ]] || continue
-    first=$((10#${BASH_REMATCH[1]})); last=$((10#${BASH_REMATCH[2]}))
+  for session in "${SESSIONS[@]}"; do
     groups=$((groups + 1))
     echo "=================================================================="
-    echo "[INFO] batch $(printf %02d "$bn"), rig $(basename "$calib")"
+    echo "[INFO] batch $(printf %02d "$bn"), session $session (cam${COSILAB_SESSIONS[$session]// /, cam})"
     echo "=================================================================="
+    calib=""
     cam_dirs=()
-    for ((cn = first; cn <= last; cn++)); do
-      seq="$(printf 'cam%02d_batch%02d' "$cn" "$bn")"
+    for cam in ${COSILAB_SESSIONS[$session]}; do
+      seq="cam${cam}_batch$(printf %02d "$bn")"
       raw="$RAW_DIR/$seq/raw_mhr.pt"
       if [ ! -f "$raw" ]; then
         echo "[INFO] $seq: no raw_mhr.pt, left out"
+        continue
+      fi
+      cam_calib="$(rig_calibration_for_cam "$EXTR_DIR" "$cam")"
+      if [ -z "$cam_calib" ]; then
+        echo "[WARN] $seq: cam$cam is in no rig calibration in $EXTR_DIR, left out" >&2
+        continue
+      fi
+      calib="${calib:-$cam_calib}"
+      if [ "$cam_calib" != "$calib" ]; then
+        echo "[WARN] $seq: calibrated in $(basename "$cam_calib"), the session's other cameras in" \
+             "$(basename "$calib"); left out" >&2
         continue
       fi
       out_dir="$SMOOTH_DIR/$seq/$CAMERA_LABEL"
@@ -129,7 +145,7 @@ for bn in "${BATCH_NUMS[@]}"; do
       fi
     done
     if [ ${#cam_dirs[@]} -lt 2 ]; then
-      echo "[WARN] Fewer than two cameras of this rig have output; skipping the multi-view step" >&2
+      echo "[WARN] Fewer than two cameras of this session and batch can take part; skipping the multi-view step" >&2
       echo ""
       continue
     fi
@@ -145,6 +161,6 @@ for bn in "${BATCH_NUMS[@]}"; do
 done
 
 echo "=================================================================="
-echo "[INFO] All done. $groups batch/rig group(s), $failed failure(s)."
+echo "[INFO] All done. $groups batch/session group(s), $failed failure(s)."
 echo "=================================================================="
 [ "$failed" -eq 0 ]

@@ -126,6 +126,25 @@ def camera_number(out_dir: str, opts: Dict[str, str]) -> Optional[int]:
     return None
 
 
+# cosilab recording sessions. Within a session (and batch), the same frame
+# number is the same moment in every camera; the two sessions are separate
+# recordings. cam05 has no rig calibration yet (parameters-camera-01-to-04.json),
+# so the multi-view step cannot use it.
+COSILAB_SESSIONS = {1: (6, 7, 8, 9, 10), 2: (1, 2, 3, 4, 5)}
+
+
+def session_of(cam_num: Optional[int]) -> Optional[int]:
+    return next((s for s, cams in COSILAB_SESSIONS.items() if cam_num in cams), None)
+
+
+def batch_number(out_dir: str, opts: Dict[str, str]) -> Optional[int]:
+    for text in (os.path.abspath(out_dir), opts.get("raw", ""), opts.get("input_dir", ""), opts.get("input", "")):
+        m = re.search(r"cam\d{2}_batch(\d+)", text)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def read_npz_rows(path: str, key: str, rows: np.ndarray, chunk: int = 256) -> np.ndarray:
     """rows (sorted) of the array *key* in an npz, decompressing as a stream so
     only the selected rows are kept in memory."""
@@ -255,6 +274,12 @@ def main() -> None:
     world_rig: Optional[List[Camera]] = None
     shown_cams = set()
     spaces = set()
+    # Only cameras of one session and batch show the same moments
+    recordings = {(session_of(camera_number(d, o)), batch_number(d, o))
+                  for d, o in ((d, read_run_options(d)) for d in args.out_dirs)}
+    if len(recordings) > 1:
+        raise SystemExit(f"[ERROR] The outputs are from different recordings (session, batch): {sorted(recordings, key=str)}; "
+                         "frame numbers only match within one session (cam06-10 / cam01-05) and batch.")
     for out_dir in args.out_dirs:
         opts = read_run_options(out_dir)
         cam_num = camera_number(out_dir, opts)

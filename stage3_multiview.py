@@ -3,12 +3,16 @@
 Stage 3, multi-view option: metric scale and floor from the rig's other
 cameras instead of an assumed camera height.
 
-Input: Stage 3 outputs of several cameras of one calibrated rig (cosilab:
-cam06-10 or cam01-04) for the same batch, exported in camera space without
-the ground step (stage3_mhr.py --export-camera-space --no-ground;
-job_scripts/stage3_multiview.sh makes them as <seq>/stage3_camera). Real person
-IDs are the same across cameras, and frame numbers are assumed in sync (see
-"sync" below). Negative IDs (people outside the study) are ignored.
+Input: Stage 3 outputs of several cameras of one recording session and batch,
+exported in camera space without the ground step (stage3_mhr.py
+--export-camera-space --no-ground; job_scripts/stage3_multiview.sh makes them
+as <seq>/stage3_camera). cosilab has two sessions, separate recordings:
+session 1 = cam06-10 (rig calibration parameters-camera-06-to-10.json),
+session 2 = cam01-05 (parameters-camera-01-to-04.json; cam05 is not in it, so
+it cannot take part). Within a session and batch the same frame number is the
+same moment in every camera, and real person IDs are the same across cameras.
+Inputs from different sessions or batches are refused. Negative IDs (people
+outside the study) are ignored.
 
   1. scale     One camera cannot tell a person's size from their distance:
                scaling the camera-space mesh about the camera centre leaves the
@@ -68,7 +72,8 @@ if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
 from scripts.make_ground_extrinsics import extrinsics_filename, ground_extrinsics
-from scripts.view_stage3 import camera_number, load_rig_calibration, read_run_options
+from scripts.view_stage3 import (COSILAB_SESSIONS, batch_number, camera_number, load_rig_calibration,
+                                 read_run_options, session_of)
 from smoothing.ground_plane_opt import FOOT_IDXS, GroundOptConfig, load_extrinsics_json, optimize_ground_ray_scale
 from utils.plot_mesh_heights import plot_mesh_heights
 
@@ -120,7 +125,8 @@ def load_camera(in_dir: str, out_label: str, rig: Dict[str, Any]) -> CamInput:
     num = camera_number(in_dir, opts)
     name = f"cam{num:02d}" if num is not None else None
     if name not in rig:
-        raise SystemExit(f"[ERROR] {in_dir}: camera {name} is not in the rig calibration ({sorted(rig)})")
+        raise SystemExit(f"[ERROR] {in_dir}: camera {name} is not in the rig calibration ({sorted(rig)}); "
+                         f"sessions: {COSILAB_SESSIONS}")
     mesh_dir = os.path.join(in_dir, "meshes_4d_individual")
     people: Dict[int, CamPerson] = {}
     for fn in sorted(os.listdir(mesh_dir)):
@@ -380,13 +386,19 @@ def main() -> None:
 
     rig_cams = load_rig_calibration(args.calib)
     rig = {c.name: c for c in rig_cams}
+    recordings = {(session_of(camera_number(d, o)), batch_number(d, o))
+                  for d, o in ((d, read_run_options(d)) for d in args.inputs)}
+    if len(recordings) > 1:
+        raise SystemExit(f"[ERROR] Inputs from different recordings (session, batch): {sorted(recordings, key=str)}; "
+                         "only cameras of one session (cam06-10 / cam01-05) and batch show the same moments")
     cams = [load_camera(d, args.label, rig) for d in args.inputs]
     names = [c.name for c in cams]
     if len(set(names)) != len(names):
         raise SystemExit(f"[ERROR] Several inputs of the same camera: {names}")
     if len(cams) < 2:
         raise SystemExit("[ERROR] Needs at least two cameras")
-    print(f"[INFO] Rig {os.path.basename(args.calib)}; cameras: "
+    session, batch = next(iter(recordings))
+    print(f"[INFO] Session {session}, batch {batch}, rig {os.path.basename(args.calib)}; cameras: "
           + ", ".join(f"{c.name} ({len(c.people)} people)" for c in cams), flush=True)
 
     sync = sync_check(cams)
@@ -415,6 +427,8 @@ def main() -> None:
                                                               world_scale=float(args.world_scale))
 
     summary: Dict[str, Any] = {
+        "session": session,
+        "batch": batch,
         "calib": os.path.abspath(args.calib),
         "options": vars(args),
         "sync": sync,
