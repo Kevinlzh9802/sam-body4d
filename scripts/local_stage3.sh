@@ -14,8 +14,8 @@
 # Output: experiments/stage3_local/<seq>/<segment>/
 #   raw_mhr.pt          the segment's raw params
 #   <label>/            stage3_mhr.py output (camera space, so it compares with the
-#                       jitter variants), incl. diagnostics/, reproj_overlay/ and
-#                       reproj_overlay.mp4 (not with --camera);
+#                       jitter variants), incl. diagnostics/ and reproj_overlay/
+#                       (no overlay video locally);
 #                       label default: stage3_height with extrinsics (height option),
 #                       else stage3_noground; stage3_camera with --camera
 #   jitter/             jitter_report.json from scripts/jitter_check.py
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
     --cpu)       DEVICE=cpu; shift ;;
     --no-stage3) RUN_STAGE3=0; shift ;;
     --no-jitter) RUN_JITTER=0; shift ;;
-    --camera)    S3_MODE=(--no-ground --no-video); LABEL="${LABEL:-stage3_camera}"; shift ;;
+    --camera)    S3_MODE=(--no-ground); LABEL="${LABEL:-stage3_camera}"; shift ;;
     --label)     LABEL="$2"; shift 2 ;;
     --stage3-args) read -r -a S3_EXTRA <<< "$2"; shift 2 ;;
     --)          shift; EXTRA=("$@"); break ;;
@@ -114,7 +114,7 @@ if [ "$RUN_STAGE3" = 1 ]; then
   fi
   # Camera-space export so the jitter numbers are comparable (m, same frame as the raw variants)
   run stage3_mhr.py --raw "$OUT/raw_mhr.pt" --out "$OUT/$LABEL" --input-dir "$STAGE1" \
-    --camera-intrinsics-json "$INTR" --config "$CFG" --device "$DEVICE" --export-camera-space \
+    --camera-intrinsics-json "$INTR" --config "$CFG" --device "$DEVICE" --export-camera-space --no-video \
     ${GROUND[@]+"${GROUND[@]}"} ${S3_MODE[@]+"${S3_MODE[@]}"} ${S3_EXTRA[@]+"${S3_EXTRA[@]}"}
   S3_ARGS=(--stage3-dir "$LABEL=$OUT/$LABEL")
 fi

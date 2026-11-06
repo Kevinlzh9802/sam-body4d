@@ -8,8 +8,8 @@
 #
 # Per camera, scripts/local_stage3.sh --camera makes the camera-space input
 # (experiments/stage3_local/<seq>/<segment>/stage3_camera, reused if present),
-# then stage3_multiview.py writes .../stage3_multiview next to it, with the
-# reprojection overlay video reproj_overlay.mp4 of every camera. Needs what
+# then stage3_multiview.py writes .../stage3_multiview next to it (no overlay
+# videos locally). Needs what
 # local_stage3.sh needs for each camera, plus the rig calibration
 # experiments/extrinsics/parameters-camera-AA-to-BB.json.
 #
@@ -78,7 +78,6 @@ SIF="${SB4D_SIF:-apptainer/body4d_osmesa_cu128.sif}"
 echo "[INFO] Multi-view step: ${DIRS[*]} with $CALIB"
 apptainer exec --pwd /mnt/sam-body4d --bind "$REPO:/mnt/sam-body4d" \
   --env "PYTHONPATH=/mnt/sam-body4d" "$SIF" \
-  python stage3_multiview.py "${DIRS[@]}" --calib "$CALIB" ${EXTRA[@]+"${EXTRA[@]}"}
+  python stage3_multiview.py "${DIRS[@]}" --calib "$CALIB" --no-video ${EXTRA[@]+"${EXTRA[@]}"}
 
-echo "[INFO] Overlay videos: ${DIRS[*]//stage3_camera/stage3_multiview/reproj_overlay.mp4}"
 echo "[INFO] View the meshes: python scripts/view_stage3.py ${DIRS[*]//stage3_camera/stage3_multiview}  (needs viser)"
