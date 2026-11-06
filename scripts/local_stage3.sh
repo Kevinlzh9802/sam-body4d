@@ -14,7 +14,8 @@
 # Output: experiments/stage3_local/<seq>/<segment>/
 #   raw_mhr.pt          the segment's raw params
 #   <label>/            stage3_mhr.py output (camera space, so it compares with the
-#                       jitter variants), incl. diagnostics/ and reproj_overlay/;
+#                       jitter variants), incl. diagnostics/, reproj_overlay/ and
+#                       reproj_overlay.mp4 (not with --camera);
 #                       label default: stage3_height with extrinsics (height option),
 #                       else stage3_noground; stage3_camera with --camera
 #   jitter/             jitter_report.json from scripts/jitter_check.py
@@ -48,7 +49,7 @@ while [ $# -gt 0 ]; do
     --cpu)       DEVICE=cpu; shift ;;
     --no-stage3) RUN_STAGE3=0; shift ;;
     --no-jitter) RUN_JITTER=0; shift ;;
-    --camera)    S3_MODE=(--no-ground); LABEL="${LABEL:-stage3_camera}"; shift ;;
+    --camera)    S3_MODE=(--no-ground --no-video); LABEL="${LABEL:-stage3_camera}"; shift ;;
     --label)     LABEL="$2"; shift 2 ;;
     --stage3-args) read -r -a S3_EXTRA <<< "$2"; shift 2 ;;
     --)          shift; EXTRA=("$@"); break ;;

@@ -22,7 +22,9 @@ whole frames x people grid):
 Steps 1, 3 and 4 can be switched off (--no-smooth, --no-mask-reproj, --no-ground)
 to compare. Plots: diagnostics/ (raw pred_cam_t), reproj_overlay/ (final meshes
 and body skeletons on the Stage 1 frames, every --overlay-interval frames, 100 by
-default), and with extrinsics the world-space height / feet / ground plots.
+default), reproj_overlay.mp4 (the same on every frame,
+scripts/render_overlay_video.py; --no-video to skip), and with extrinsics the
+world-space height / feet / ground plots.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from utils.plot_ground_info import run_plot_ground_info
 from utils.plot_mesh_heights import plot_mesh_heights
 from utils.zip_utils import cleanup_extracted_dir, make_extract_root, resolve_archive_dir
 from scripts.diagnose_pred_cam_t import run_diagnostics as run_pred_cam_t_diagnostics
+from scripts.render_overlay_video import render_overlay_video
 
 MHR_KEYS = ("global_rot", "body_pose", "hand", "scale", "shape", "face")
 OVERLAY_INTERVAL = 100
@@ -130,6 +133,7 @@ def main() -> None:
     ap.add_argument("--mhr-batch-size", type=int, default=256)
     ap.add_argument("--overlay-interval", type=int, default=OVERLAY_INTERVAL,
                     help="Frames between reprojection overlays (reproj_overlay/); 0 = none")
+    ap.add_argument("--no-video", action="store_true", help="No reprojection overlay video (reproj_overlay.mp4)")
     # 1. smoothing
     ap.add_argument("--no-smooth", action="store_true")
     ap.add_argument("--smooth-sigma-pose", type=float, default=SmoothConfig.sigma_pose,
@@ -361,6 +365,11 @@ def main() -> None:
             print(f"[WARN] Reproj overlays failed: {e}")
     elif args.overlay_interval > 0:
         print(f"[INFO] Skipping reproj overlay: images dir not found ({images_dir!r})")
+    if not args.no_video:
+        try:
+            render_overlay_video(out_dir, stage1_dir=stage1_dir)
+        except Exception as e:
+            print(f"[WARN] Overlay video failed: {e}")
 
     # Archives extracted in place next to the raw file (a temp extract_root is removed at exit)
     if extract_root is None:

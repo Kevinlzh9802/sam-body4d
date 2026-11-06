@@ -2,7 +2,8 @@
 # Stage 3, multi-view option (cosilab): no assumed camera height. Metric scale
 # from triangulating each person across the cameras of a recording session,
 # the floor from their feet (stage3_multiview.py)
-# -> $SMOOTH_DIR/<seq>/stage3_multiview/ for every camera taking part.
+# -> $SMOOTH_DIR/<seq>/stage3_multiview/ for every camera taking part, each with
+# its reprojection overlay video reproj_overlay.mp4.
 #
 # cosilab sessions (lib/dataset.sh), two separate recordings: session 1 =
 # cam06-10, session 2 = cam01-05. Within a session and batch the same frame
@@ -16,7 +17,8 @@
 #   1. every camera taking part: stage3_mhr.py in camera space without the
 #      ground step -> <seq>/stage3_camera (reused if already there; the same as
 #      `stage3_mhr.sh -camera <seq>`, which can make them in parallel first)
-#   2. stage3_multiview.py over those cameras -> <seq>/stage3_multiview
+#   2. stage3_multiview.py over those cameras -> <seq>/stage3_multiview, incl.
+#      reproj_overlay.mp4 per camera
 # The height option (job_scripts/stage3_mhr.sh -> <seq>/stage3_height) is separate.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
@@ -32,6 +34,7 @@
 #   -sigma <frames> | -no-smooth | -no-mask   step 1 options (folder names get
 #                                the same suffixes as stage3_mhr.sh's)
 #   -redo                        run step 1 again even if stage3_camera exists
+#   -no-video                    no reproj_overlay.mp4
 #   -sbatch "<flags>"            extra sbatch flags
 set -euo pipefail
 
@@ -48,6 +51,7 @@ STAGE3_ARGS=()
 SUFFIX=""
 SESSION=""
 REDO=0
+MV_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     -no-mask)           STAGE3_ARGS+=(--no-mask-reproj); SUFFIX+="_nomask"; shift ;;
     -session|--session) [ $# -ge 2 ] || die "$1 needs a value"; SESSION="$2"; shift 2 ;;
     -redo)              REDO=1; shift ;;
+    -no-video)          MV_ARGS+=(--no-video); shift ;;
     *)
       parse_common_args "$@"
       shift "$COMMON_SHIFT"
@@ -85,7 +90,7 @@ self_submit stage3_multiview "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
 echo "[INFO] Batches: ${SEQS[*]}  Sessions: ${SESSIONS[*]}  Rig calibrations: $EXTR_DIR"
-echo "[INFO] Step 1: stage3_mhr.py --no-ground --export-camera-space ${STAGE3_ARGS[*]} -> <seq>/$CAMERA_LABEL"
+echo "[INFO] Step 1: stage3_mhr.py --no-ground --export-camera-space --no-video ${STAGE3_ARGS[*]} -> <seq>/$CAMERA_LABEL"
 echo "[INFO] Step 2: stage3_multiview.py -> <seq>/$MV_LABEL"
 echo ""
 
@@ -136,7 +141,7 @@ for bn in "${BATCH_NUMS[@]}"; do
         --camera-intrinsics-json "$(host_to_container "$intrinsics")" \
         ${DIR_ARGS[@]+"${DIR_ARGS[@]}"} \
         --config "$CONFIG" \
-        --no-ground --export-camera-space \
+        --no-ground --export-camera-space --no-video \
         ${STAGE3_ARGS[@]+"${STAGE3_ARGS[@]}"}; then
         cam_dirs+=("$(host_to_container "$out_dir")")
       else
@@ -150,7 +155,7 @@ for bn in "${BATCH_NUMS[@]}"; do
       continue
     fi
     if run_in_container stage3_multiview.py "${cam_dirs[@]}" \
-      --calib "$(host_to_container "$calib")" --label "$MV_LABEL"; then
+      --calib "$(host_to_container "$calib")" --label "$MV_LABEL" ${MV_ARGS[@]+"${MV_ARGS[@]}"}; then
       echo "[INFO] multi-view step completed."
     else
       echo "[ERROR] multi-view step FAILED." >&2

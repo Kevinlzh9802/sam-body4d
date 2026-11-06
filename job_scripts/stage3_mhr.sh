@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stage 3, height option: raw MHR params -> smoothed, mask-aligned, grounded
-# meshes (stage3_mhr.py) -> $SMOOTH_DIR/<seq>/stage3_height/meshes_4d_individual/
+# meshes (stage3_mhr.py) -> $SMOOTH_DIR/<seq>/stage3_height/meshes_4d_individual/,
+# plus reproj_overlay.mp4 there (the meshes on every Stage 1 frame)
 #
 # Steps (stage3_mhr.py, one person at a time): temporal smoothing -> MHR forward ->
 # mask reprojection -> ground (each person scaled about the camera centre +
@@ -31,10 +32,11 @@
 #   -cam <num> -b <spec> | -all <prefix> | <seq> ...   (see lib/common.sh)
 #   -sigma <frames>              smoothing width (default: stage3_mhr.py's)
 #   -no-smooth | -no-mask | -no-ground   leave a step out (to compare)
+#   -no-video                    no reproj_overlay.mp4
 #   -camera-space                export in camera space even with extrinsics
-#   -camera                      = -no-ground -camera-space, into stage3_camera: the
-#                                per-camera input of the multi-view option (its
-#                                launcher makes these itself if missing)
+#   -camera                      = -no-ground -camera-space -no-video, into
+#                                stage3_camera: the per-camera input of the multi-view
+#                                option (its launcher makes these itself if missing)
 #   -label <name>                output folder name (default: stage3_height, or
 #                                stage3_noground / stage3_camera; plus _s<sigma> and
 #                                _no<step> for the other options, _cam for -camera-space)
@@ -64,7 +66,8 @@ while [[ $# -gt 0 ]]; do
     -no-mask)           STAGE3_ARGS+=(--no-mask-reproj); SUFFIX+="_nomask"; shift ;;
     -no-ground)         STAGE3_ARGS+=(--no-ground); BASE=stage3_noground; NO_GROUND=1; shift ;;
     -camera-space)      STAGE3_ARGS+=(--export-camera-space); SUFFIX+="_cam"; shift ;;
-    -camera)            STAGE3_ARGS+=(--no-ground --export-camera-space); BASE=stage3_camera; NO_GROUND=1; shift ;;
+    -no-video)          STAGE3_ARGS+=(--no-video); shift ;;
+    -camera)            STAGE3_ARGS+=(--no-ground --export-camera-space --no-video); BASE=stage3_camera; NO_GROUND=1; shift ;;
     -label|--label)     [ $# -ge 2 ] || die "$1 needs a value"; LABEL="$2"; shift 2 ;;
     -segment|-simple|--segment|--simple)
       die "$1 was removed: Stage 3 is one pipeline now (stage3_mhr.py), see -h" ;;

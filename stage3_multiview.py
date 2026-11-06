@@ -40,7 +40,9 @@ outside the study) are ignored.
                floor z=0, z up, origin below the reference camera; same keys as
                stage3_mhr.py), extrinsics/extrinsic_cam_<MM>.json for all rig
                cameras at the estimated height, stage3_run_options.txt,
-               mesh_heights_world.png. Summary of all cameras:
+               mesh_heights_world.png, reproj_overlay.mp4 (the meshes on every
+               Stage 1 frame, scripts/render_overlay_video.py; --no-video to
+               skip). Summary of all cameras:
                stage3_multiview_summary.json in each output folder.
 
 Sync: the summary also lists, per camera pair, the median distance between the
@@ -72,6 +74,7 @@ if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
 from scripts.make_ground_extrinsics import extrinsics_filename, ground_extrinsics
+from scripts.render_overlay_video import render_overlay_video
 from scripts.view_stage3 import (COSILAB_SESSIONS, batch_number, camera_number, load_rig_calibration,
                                  read_run_options, session_of)
 from smoothing.ground_plane_opt import FOOT_IDXS, GroundOptConfig, load_extrinsics_json, optimize_ground_ray_scale
@@ -382,6 +385,7 @@ def main() -> None:
                     help="triangulated (frame, torso point) samples needed for a person's own scale")
     ap.add_argument("--no-contact", action="store_true", help="skip the per-frame floor contact")
     ap.add_argument("--ground-iters", type=int, default=GroundOptConfig.iters)
+    ap.add_argument("--no-video", action="store_true", help="no reprojection overlay videos")
     args = ap.parse_args()
 
     rig_cams = load_rig_calibration(args.calib)
@@ -458,6 +462,11 @@ def main() -> None:
                          "extrinsics_json": extr_path, "export_camera_space": False,
                          "world_scale": args.world_scale, "calib": os.path.abspath(args.calib)}.items():
                 fh.write(f"{k}: {v}\n")
+        if not args.no_video:
+            try:
+                render_overlay_video(c.out_dir)
+            except Exception as e:
+                print(f"[WARN] {c.name}: overlay video failed: {e}")
     for c in cams:
         with open(os.path.join(c.out_dir, "stage3_multiview_summary.json"), "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2)
