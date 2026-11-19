@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=00:15:00
-#SBATCH --output=ecc_repro_%j.out
+#SBATCH --output=/home/zli33/linuxhome/slurm_outputs/sam_4d_body/ecc_repro_%j.out
 
 echo "host=$(hostname)  job=$SLURM_JOB_ID  CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES  date=$(date -Is)"
 
