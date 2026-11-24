@@ -7,9 +7,9 @@
 # mask reprojection -> ground (each person scaled about the camera centre +
 # shifted along the viewing ray so the feet are on the floor of the extrinsics,
 # the image stays put) -> export in world coordinates.
-# The floor comes from the camera's extrinsics JSON: for cosilab an assumed
-# height of cam01/cam06 (scripts/make_ground_extrinsics.py --height 3.5). The
-# multi-view option estimates the floor instead: job_scripts/stage3_multiview.sh.
+# The floor comes from the camera's extrinsics JSON (conflab). For cosilab the assumed-camera-height floor is
+# gone: the multi-view pipeline (job_scripts/stage3_mvfit.sh) fits one world body per person to all cameras and
+# the floor to their feet; here cosilab runs only as a per-camera baseline (-camera / -no-ground).
 #
 # Needs $RAW_DIR/<seq>/raw_mhr.pt (Stage 2), $STAGE1_DIR/<seq>/masks.zip and
 # images.zip (Stage 1), the sequence's intrinsics JSON and its extrinsics JSON
@@ -85,6 +85,9 @@ STAGE3_SCRIPT="stage3_mhr.py"
 CONTAINER_GPU=0
 
 load_dataset "$DATASET_ARG"
+if [ "$DATASET" = cosilab ] && [ "$NO_GROUND" = 0 ]; then
+  die "cosilab has no assumed-height floor any more: use job_scripts/stage3_mvfit.sh, or -camera / -no-ground for a per-camera baseline"
+fi
 resolve_seqs "$RAW_DIR"
 self_submit stage3 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 

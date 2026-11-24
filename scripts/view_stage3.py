@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Browser viewer (viser) for Stage 3 meshes: plays back every person of one or
-more stage3_mhr.py / stage3_multiview.py outputs (meshes_4d_individual/<id>.npz).
+more stage3_mhr.py outputs (meshes_4d_individual/<id>.npz).
 
 Camera-space outputs (--export-camera-space) of several cameras of one rig are
 placed with the rig's multi-camera calibration (libCalib JSON
@@ -86,7 +86,7 @@ def _rodrigues(rvec: np.ndarray) -> np.ndarray:
 
 def world_cameras(rig: List[Camera], calib_dir: str, world_scale: float) -> List[Camera]:
     """The rig's cameras posed in the world frame, from extrinsic_cam_<MM>.json
-    (world_to_camera, as scripts/make_ground_extrinsics.py writes them)."""
+    (world_to_camera, as stage3_mvfit.py writes them)."""
     out = []
     for cam in rig:
         path = os.path.join(calib_dir, f"extrinsic_{cam.name.replace('cam', 'cam_')}.json")

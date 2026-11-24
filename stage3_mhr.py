@@ -124,7 +124,8 @@ def main() -> None:
     ap.add_argument("--input-dir", default=None,
                     help="Stage 1 folder with images(.zip)/masks(.zip). Only read: archives are "
                          "extracted to a temp dir. Default: the --raw folder (extracted in place).")
-    ap.add_argument("--camera-intrinsics-json", required=True)
+    ap.add_argument("--camera-intrinsics-json", default=None,
+                    help="pinhole intrinsics; not needed for a Stage 2 --fisheye raw file (its meta has K, D)")
     ap.add_argument("--camera-scale", type=float, default=0.5, help="Stage 1 image size / calibration size")
     ap.add_argument("--extrinsics-json", default=None,
                     help="world_to_camera extrinsics, floor z=0: enables the ground step and world export")
@@ -194,8 +195,22 @@ def main() -> None:
         mhr = smooth_mhr_params(mhr, frame_names, slots, obj_ids, SmoothConfig(
             sigma_pose=args.smooth_sigma_pose, sigma_rot=args.smooth_sigma_rot, sigma_cam=args.smooth_sigma_cam))
 
-    K_np, _dist = read_camera_intrinsics_new(args.camera_intrinsics_json)
-    K_np = adjust_K(K_np, scale=float(args.camera_scale))
+    D = None
+    if meta.get("camera_model") == "fisheye_virtual":
+        # Stage 2 --fisheye: real-camera params; masks fitted with the fisheye model (K, D at the Stage 1 size)
+        K_np = np.asarray(meta["fisheye_K"], dtype=np.float32)
+        D = torch.tensor(meta["fisheye_D"], dtype=torch.float32, device=device)
+        with open(os.path.join(out_dir, "stage3_run_options.txt"), "a", encoding="utf-8") as f:
+            f.write(f"camera_model: fisheye\nfisheye_K: {json.dumps(meta['fisheye_K'])}\n"
+                    f"fisheye_D: {json.dumps(meta['fisheye_D'])}\n")
+        if args.overlay_interval > 0:
+            print("[INFO] Fisheye input: no PNG overlays (reproj_overlay/ is pinhole-only); the video is fisheye")
+            args.overlay_interval = 0
+    else:
+        if not args.camera_intrinsics_json:
+            raise SystemExit("[ERROR] --camera-intrinsics-json is required for a pinhole Stage 2 raw file")
+        K_np, _dist = read_camera_intrinsics_new(args.camera_intrinsics_json)
+        K_np = adjust_K(K_np, scale=float(args.camera_scale))
     K = torch.from_numpy(K_np).to(device=device, dtype=torch.float32)
 
     extr = load_extrinsics_json(args.extrinsics_json, device=device) if args.extrinsics_json else None
@@ -274,7 +289,7 @@ def main() -> None:
                 if a2c_per_frame is not None:
                     mask_ids = {i: a2c_per_frame[int(t)][oid] for i, t in enumerate(fr) if oid in a2c_per_frame[int(t)]}
                 t_run, m = optimize_mask_reprojection(
-                    K=K, vertices_local=verts[run].to(device), t0=t_p[run], masks=run_masks,
+                    K=K, D=D, vertices_local=verts[run].to(device), t0=t_p[run], masks=run_masks,
                     obj_id=oid, mask_ids=mask_ids, cfg=mask_cfg,
                 )
                 t_p[run] = t_run

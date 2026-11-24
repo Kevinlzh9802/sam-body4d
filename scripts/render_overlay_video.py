@@ -6,15 +6,16 @@ skeleton (primary joints only) and the person's IDs, and the Stage 1 mask
 outlines in the same colour (grey: a mask without a mesh)
 -> <stage3_dir>/reproj_overlay.mp4 (H.264, 60 fps by default).
 
-Works on any Stage 3 output folder (stage3_height, stage3_multiview,
-stage3_noground, ...): meshes_4d_individual/*.npz, back to camera space with the
+Works on any Stage 3 output folder (stage3_camera, stage3_noground, conflab's
+world exports, stage3_mvfit.py's cameras/<seq>/ with the shared world bodies of
+mesh_dir): meshes_4d_individual/*.npz, back to camera space with the
 extrinsics when exported in world coordinates, and stage3_run_options.txt for
-the intrinsics and the Stage 1 folder (images(.zip), masks(.zip),
+the intrinsics (pinhole, or fisheye K and D) and the Stage 1 folder (images(.zip), masks(.zip),
 id_mapping.json; archives are read in place). The video covers the frames from
 the first to the last frame with a mesh. A person has the same colour in every
 camera's video and in scripts/view_stage3.py.
 
-Called at the end of stage3_mhr.py and, per camera, stage3_multiview.py
+Called at the end of stage3_mhr.py and, per camera, stage3_mvfit.py
 (--no-video there to skip). To (re)make videos by hand:
 
   python scripts/render_overlay_video.py <stage3_dir> [<stage3_dir> ...]

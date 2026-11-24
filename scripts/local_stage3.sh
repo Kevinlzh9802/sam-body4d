@@ -8,8 +8,8 @@
 #   experiments/mhr_raw/<seq>/                          raw_mhr.pt or raw_mhr_segments/*.pt
 #   experiments/sam3_output/<seq>/                      masks.zip, images.zip, id_mapping.json
 #   experiments/intrinsics/parameters-camera-<MM>.json
-#   experiments/extrinsics/extrinsic_cam_<MM>.json      optional (adds the ground step;
-#                                                       scripts/make_ground_extrinsics.py)
+#   experiments/extrinsics/extrinsic_cam_<MM>.json      optional (adds the ground step; conflab-style
+#                                                       floor extrinsics, there is no cosilab one any more)
 #
 # Output: experiments/stage3_local/<seq>/<segment>/
 #   raw_mhr.pt          the segment's raw params
@@ -26,9 +26,9 @@
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 --no-stage3 # jitter attribution only
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 --label noground --stage3-args "--no-ground"
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 --stage3-args "--overlay-interval 20"
-#   bash scripts/local_stage3.sh cam06_batch01 seg010 --camera --no-jitter  # multi-view input
+#   bash scripts/local_stage3.sh cam06_batch01 seg010 --camera --no-jitter  # per-camera baseline
 #   bash scripts/local_stage3.sh cam06_batch01 seg010 -- --stage3-sigmas 2 4  # extra jitter_check.py args
-# The multi-view option over several cameras: scripts/local_stage3_multiview.sh
+# The multi-view fit locally: scripts/local_sif.sh python stage3_mvfit.py ... (see stage3_mvfit.py)
 # Env: SB4D_SIF (default apptainer/body4d_osmesa_cu128.sif)
 set -euo pipefail
 

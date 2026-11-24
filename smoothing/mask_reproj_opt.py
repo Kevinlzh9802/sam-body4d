@@ -16,6 +16,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from utils import fisheye
+
 
 @dataclass
 class MaskReprojOptConfig:
@@ -222,6 +224,7 @@ def optimize_mask_reprojection(
     obj_id: int,               # actual person ID (for logging)
     mask_ids: Optional[Dict[int, int]] = None,  # frame_idx -> consecutive mask pixel ID (if None, use obj_id)
     cfg: MaskReprojOptConfig = MaskReprojOptConfig(),
+    D: Optional[torch.Tensor] = None,  # (4,) OpenCV fisheye coefficients: project with the fisheye model
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Optimize pred_cam_t to maximize overlap between projected mesh and mask.
@@ -306,9 +309,12 @@ def optimize_mask_reprojection(
         # Project the sampled vertices of every valid frame: (F, P, ...)
         v_cam = verts_v + t[fidx].unsqueeze(1)
         in_front = v_cam[..., 2] > 0.1
-        v_proj = v_cam @ K.T
-        z = torch.where(in_front, v_proj[..., 2], torch.ones_like(v_proj[..., 2]))
-        v_2d = v_proj[..., :2] / (z.unsqueeze(-1) + 1e-8)
+        if D is not None:
+            v_2d = fisheye.project_torch(v_cam, K, D)
+        else:
+            v_proj = v_cam @ K.T
+            z = torch.where(in_front, v_proj[..., 2], torch.ones_like(v_proj[..., 2]))
+            v_2d = v_proj[..., :2] / (z.unsqueeze(-1) + 1e-8)
         if cfg.mask_scale != 1.0:
             v_2d = v_2d * cfg.mask_scale
         valid = in_front & (v_2d[..., 0] >= 0) & (v_2d[..., 0] < W) & \
@@ -387,7 +393,8 @@ def optimize_mask_reprojection(
             in_front = v_cam[:, 2] > 0.1
             if not in_front.any():
                 continue
-            v_2d = project_vertices_to_2d(v_cam[in_front], K)
+            v_2d = (fisheye.project_torch(v_cam[in_front], K, D) if D is not None
+                    else project_vertices_to_2d(v_cam[in_front], K))
             if cfg.mask_scale != 1.0:
                 v_2d = v_2d * cfg.mask_scale
             H, W = masks[ti].shape
