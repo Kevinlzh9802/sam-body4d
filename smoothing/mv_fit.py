@@ -458,7 +458,8 @@ def view_losses(tt: _TrackTensors, kp_w: torch.Tensor, v_w: torch.Tensor, f_idx:
         out['sil'] = (1 - (inside * front).sum(1) / n_front).sum()
         size = tt.size[ti, None]
         far = torch.where(front[..., None] > 0, vpx, torch.full_like(vpx, 1e6))
-        d = torch.cdist(tt.mask_pts[ti], far).amin(-1) / size              # (n, P)
+        # exact distances: the default matmul form is imprecise in float32 (and not reproducible on the GPU)
+        d = torch.cdist(tt.mask_pts[ti], far, compute_mode='donot_use_mm_for_euclid_dist').amin(-1) / size  # (n, P)
         out['fill'] = d.clamp(max=cfg.fill_cap).mean(-1).sum()
         cen = (vpx * front[..., None]).sum(1) / n_front[:, None]
         big = torch.where(front[..., None] > 0, vpx, torch.full_like(vpx, -1e6)).amax(1)
