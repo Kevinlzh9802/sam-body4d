@@ -47,6 +47,7 @@ from utils.model_factory import build_sam3d_body_from_config
 from utils.zip_utils import make_extract_root, resolve_archive_dir, zip_and_remove_dir
 
 PROGRESS_EVERY = 600  # frames between progress lines (one cosilab segment)
+FISHEYE_KEYS = ("R_v", "f_v", "focal_length_virtual", "kp2d", "kp_conf", "rot_residual")
 
 def ignored_tracking_ids(frame_idx: int, segment_id_mappings) -> set:
     """Tracking (mask pixel) IDs of the frame that Stage 1 mapped to a negative
@@ -295,6 +296,17 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=16, help="Frames per inference call")
     parser.add_argument("--out", default=None, help="Output .pt path (default: <output-dir>/raw_mhr.pt)")
     parser.add_argument("--camera-scale", type=float, default=0.5)
+    # Fisheye footage (cosilab): per-person virtual pinhole crops instead of a pinhole K on the raw frame
+    parser.add_argument("--fisheye", action="store_true",
+                        help="cosilab: crop every person through a virtual pinhole camera of the camera's fisheye "
+                             "calibration (4TU idiap_params, utils/cosilab_camera.py); outputs are rotated back into "
+                             "the real camera and get fisheye 2D keypoints (kp2d, kp_conf). --intrinsic-path is unused.")
+    parser.add_argument("--fisheye-cam", type=int, default=None,
+                        help="camera number for --fisheye (default: from the camXX_batchYY input folder name)")
+    parser.add_argument("--crop-size", type=int, default=512, help="--fisheye: virtual crop size (px)")
+    parser.add_argument("--crop-dilate", type=float, default=1.2,
+                        help="--fisheye: crop side = this x the person's box (as Video-OnlineHMR)")
+    parser.add_argument("--max-crops", type=int, default=64, help="--fisheye: crops per SAM-3D-Body call")
 
     # Partial-run arguments
     parser.add_argument("--frame-start", type=int, default=None,
@@ -394,9 +406,23 @@ def main() -> None:
 
     os.environ["SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING"] = "1"
 
-    camera_intrinsics_path, cam_int = resolve_camera_intrinsics(
-        args.intrinsic_path, input_dir, args.camera_scale, device,
-    )
+    runner = None
+    if args.fisheye:
+        from utils import cosilab_camera
+        from utils.virtual_crops import VirtualCropRunner
+        cam_no = args.fisheye_cam
+        if cam_no is None:
+            cam_no = cosilab_camera.parse_seq(os.path.basename(os.path.normpath(input_dir)))[0]
+        fisheye_cam = cosilab_camera.load_camera(cam_no).scaled(float(args.camera_scale))
+        runner = VirtualCropRunner(estimator, fisheye_cam, device, crop_size=int(args.crop_size),
+                                   dilate=float(args.crop_dilate), max_crops=int(args.max_crops))
+        camera_intrinsics_path, cam_int = fisheye_cam.extrinsics_file, None
+        print(f"[INFO] Fisheye virtual cameras: {fisheye_cam.name}, K {fisheye_cam.K.round(2).tolist()}, "
+              f"D {fisheye_cam.D.round(5).tolist()}, image {fisheye_cam.size}, crops {args.crop_size} px")
+    else:
+        camera_intrinsics_path, cam_int = resolve_camera_intrinsics(
+            args.intrinsic_path, input_dir, args.camera_scale, device,
+        )
 
     # Scan for corrupted frames
     corrupted_set, valid_indices, valid_images, valid_masks, n_valid = scan_corrupted_frames(
@@ -419,6 +445,13 @@ def main() -> None:
         except Exception as e:
             print(f"[WARN] Failed to plot mask centroids: {e}")
 
+    fisheye_meta = {"camera_model": "pinhole"}
+    if runner is not None:
+        fisheye_meta = {"camera_model": "fisheye_virtual", "fisheye_cam": fisheye_cam.name,
+                        "fisheye_K": fisheye_cam.K.tolist(), "fisheye_D": fisheye_cam.D.tolist(),
+                        "image_size": list(fisheye_cam.size), "crop_size": int(args.crop_size),
+                        "crop_dilate": float(args.crop_dilate)}
+
     # Batch inference
     idx_path, idx_dict, mhr_shape_scale_dict, occ_dict = {}, {}, {}, {}
     valid_frames: List[Dict[str, Any]] = []
@@ -435,10 +468,13 @@ def main() -> None:
         # People Stage 1 mapped to a negative real ID are outside the study: not sent to the model
         ignore_ids = [ignored_tracking_ids(int(os.path.basename(p)[:-4]), segment_id_mappings)
                       for p in batch_images]
-        outputs, id_batch, empty_frame_list = process_image_with_mask(
-            estimator, batch_images, batch_masks,
-            idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int, ignore_ids=ignore_ids,
-        )
+        if runner is not None:
+            outputs, id_batch, empty_frame_list = runner.process(batch_images, batch_masks, ignore_ids)
+        else:
+            outputs, id_batch, empty_frame_list = process_image_with_mask(
+                estimator, batch_images, batch_masks,
+                idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int, ignore_ids=ignore_ids,
+            )
 
         batch_mask_ids = set()
         for ids_in_frame in id_batch:
@@ -512,6 +548,8 @@ def main() -> None:
                     "face": person.get("expr_params", None),
                     "pred_cam_t": person.get("pred_cam_t", None),
                     "focal_length": person.get("focal_length", None),
+                    # --fisheye: virtual camera and fisheye 2D keypoints (utils/virtual_crops.py)
+                    **{k: person[k] for k in FISHEYE_KEYS if k in person},
                 })
 
             # Determine exclusions
@@ -539,6 +577,13 @@ def main() -> None:
                 "excluded": excluded,
             })
             all_output_ids.update(obj_ids)
+
+    if runner is not None and runner.residuals:
+        r = np.asarray(runner.residuals)
+        print(f"[INFO] Virtual->real rotation: {len(r)} crops, keypoint residual max {r.max() * 1e3:.3f} mm, "
+              f"median {np.median(r) * 1e3:.3f} mm; MHR Euler convention {runner.convention!r}")
+        fisheye_meta["rot_residual_max_m"] = float(r.max())
+        fisheye_meta["mhr_euler_convention"] = runner.convention
 
     # Interpolate corrupted frames
     frames, num_interpolated = interpolate_corrupted_frames(
@@ -571,6 +616,7 @@ def main() -> None:
                 "config_path": cfg_path,
                 "camera_intrinsics": camera_intrinsics_path,
                 "camera_scale": float(args.camera_scale),
+                **fisheye_meta,
                 "note": f"Partial raw params (frames [{fs_idx}, {fe_idx})) with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
                 "segment_id_mappings": segment_id_mappings,
                 "num_corrupted_interpolated": num_interpolated,
@@ -614,6 +660,7 @@ def main() -> None:
                 "config_path": cfg_path,
                 "camera_intrinsics": camera_intrinsics_path,
                 "camera_scale": float(args.camera_scale),
+                **fisheye_meta,
                 "note": "Raw params dumped with SAM3DBODY_DISABLE_TEMPORAL_SMOOTHING=1",
                 "segment_id_mappings": segment_id_mappings,
                 "num_corrupted_interpolated": num_interpolated,

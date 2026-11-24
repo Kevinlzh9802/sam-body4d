@@ -120,7 +120,7 @@ class SAM3DBodyEstimator:
                 img = load_image(img, backend="cv2", image_format="bgr")
                 image_format = "bgr"
             else:
-                print("####### Please make sure the input image is in RGB format")
+                # in-memory images (e.g. Stage 2 virtual-camera crops) must be RGB
                 image_format = "rgb"
             height, width = img.shape[:2]
             image_list.append(img)
@@ -219,9 +219,9 @@ class SAM3DBodyEstimator:
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
             if cam_int is not None:
-                # print("Using provided camera intrinsics...")
-                cam_int = cam_int.to(batch["img"])
-                batch["cam_int"] = cam_int.clone()
+                # one (1, 3, 3) intrinsics for every image, or a list with one per image (virtual cameras)
+                cam_int_i = cam_int[i] if isinstance(cam_int, (list, tuple)) else cam_int
+                batch["cam_int"] = cam_int_i.to(batch["img"]).clone()
             elif self.fov_estimator is not None:
                 print("Running FOV estimator ...")
                 input_image = batch["img_ori"][0].data
