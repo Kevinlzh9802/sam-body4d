@@ -136,7 +136,7 @@ seq_extrinsics() {
 #   MV_VIDEO_DIR, MV_ANNOT_DIR, MV_STAGE1_DIR   cameras without annotations (02, 04, 07, 09, 12-15): segments made
 #                    from the raw GoPro files, projected prompts, and their Stage 1 output
 # ---------------------------------------------------------------------------
-MV_ROOT="${SB4D_MV_ROOT:-/tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d}"
+# MV_ROOT: lib/cluster.sh
 VOH_SIDE_TIMESTAMPS=/tudelft.net/staff-umbrella/neon/experiments/Video-OnlineHMR/cosilab_side_timestamps
 
 load_mv_dirs() {
