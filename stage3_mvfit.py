@@ -405,6 +405,8 @@ def main() -> None:
     Rf, o = floor_frame(floor)
     ws = float(args.world_scale)
     summary['floor'] = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in floor.items()}
+    summary['floor_frame'] = {'R': Rf.tolist(), 'origin_m': o.tolist(), 'world_scale': ws,
+                              'note': 'X_floor = world_scale * R (X_world - origin_m); world = session reference camera'}
     summary['floor']['reference_camera_height_m'] = float(-floor['point'] @ floor['up'])
     log(f"[INFO] floor from the fitted bodies: spread {floor['spread_m']:.3f} m, reference camera "
         f"{summary['floor']['reference_camera_height_m']:.3f} m above it")

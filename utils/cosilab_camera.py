@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, replace
 from typing import Dict, Optional
@@ -158,6 +159,26 @@ def parse_overrides(items) -> Dict[int, str]:
 # Raw GoPro footage per session frame (cameras without a session video: 02, 04, 07, 09, side cams)
 # ---------------------------------------------------------------------------
 
+def ffmpeg_exe() -> str:
+    """ffmpeg on the PATH, else the one bundled with imageio-ffmpeg (the apptainer image has only that one)."""
+    exe = shutil.which('ffmpeg')
+    if exe:
+        return exe
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def video_size(path: str) -> tuple:
+    cap = cv2.VideoCapture(path)
+    try:
+        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    finally:
+        cap.release()
+    if w <= 0 or h <= 0:
+        raise RuntimeError(f'{path}: cannot read the frame size')
+    return w, h
+
+
 def video_path(cam: int) -> str:
     return os.path.join(DATA_ROOT, 'videos', 'mingling_session_videos', f'cam{cam:02d}.mp4')
 
@@ -224,7 +245,7 @@ class RawVideoReader:
     """
     Session frames [start_frame, start_frame + num_frames) of a camera, read from its raw GoPro files (see
     raw_frame_table). Yields BGR uint8 (H, W, 3); raw frames are repeated or skipped where the world clock has gaps.
-    Needs ffmpeg/ffprobe (in the apptainer image).
+    Needs ffmpeg (ffmpeg_exe()).
     """
 
     def __init__(self, cam: int, start_frame: int, num_frames: int, table: Optional[dict] = None):
@@ -236,11 +257,7 @@ class RawVideoReader:
         self.file, self.raw_frame, self.dt = table['file'][sl], table['raw_frame'][sl], table['dt'][sl]
         if len(self.file) < num_frames:
             raise ValueError(f'cam{cam:02d}: the session has {len(table["file"])} frames, asked up to {sl.stop}')
-        probe = subprocess.run(
-            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
-             '-of', 'csv=p=0', os.path.join(self.dir, self.files[self.file[0]])],
-            capture_output=True, text=True, check=True)
-        self.width, self.height = map(int, probe.stdout.strip().split(',')[:2])
+        self.width, self.height = video_size(os.path.join(self.dir, self.files[self.file[0]]))
 
     def __len__(self):
         return self.num_frames
@@ -259,7 +276,7 @@ class RawVideoReader:
     def __iter__(self):
         frame_bytes = self.width * self.height * 3
         for name, first, count, wanted in self.segments():
-            cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-ss', f'{first / FPS:.6f}',
+            cmd = [ffmpeg_exe(), '-nostdin', '-v', 'error', '-ss', f'{first / FPS:.6f}',
                    '-i', os.path.join(self.dir, name), '-frames:v', str(count),
                    '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-']
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=frame_bytes * 4)
