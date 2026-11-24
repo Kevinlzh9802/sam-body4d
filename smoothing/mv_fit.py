@@ -147,13 +147,13 @@ class CamTrack:
 
 @dataclass
 class FitConfig:
-    iters: int = 200
+    iters: int = 300
     lr: float = 0.01
     window: int = 256           # frames per chunk (memory only: gradients of all chunks are summed)
     n_verts: int = 1000         # sampled vertices for the silhouette terms
     gmof_sigma: float = 0.15    # box-size units
     hand_weight: float = 0.2    # keypoint weight of the hand keypoints vs the body ones
-    w_kp: float = 5.0
+    w_kp: float = 20.0
     w_sil: float = 0.3
     w_fill: float = 5.0
     fill_cap: float = 0.3       # box units: mask points further than this from the body cost the same
