@@ -312,6 +312,11 @@ def main() -> None:
     ap.add_argument('--holdout', nargs='*', default=[], help='cameras evaluated but not fitted (leave-one-out)')
     ap.add_argument('--exclude', nargs='*', default=[], help='person/camera pairs left out: cam12_batch01:14')
     ap.add_argument('--people', type=int, nargs='*', default=None, help='only these person IDs')
+    ap.add_argument('--part', default=None, metavar='K/N',
+                    help='fit only every N-th person starting at K (sorted IDs), e.g. one SLURM array task each; the '
+                         'start bodies and the start floor still use everyone, so all parts get the same floor. '
+                         'Writes <out-dir>/parts/<pid>.pt and parts/summary_<K>.json; then run once with --merge')
+    ap.add_argument('--merge', action='store_true', help='no fitting: collect parts/, refit the floor, export')
     ap.add_argument('--min-frames', type=int, default=10, help='shorter person/camera tracks are dropped')
     ap.add_argument('--config', default=os.path.join(REPO_DIR, 'configs', 'body4d.yaml'))
     ap.add_argument('--world-scale', type=float, default=100.0, help='world units per metre (100 = cm)')
@@ -342,14 +347,24 @@ def main() -> None:
     if unknown:
         raise SystemExit(f'[ERROR] --holdout cameras not in the inputs: {sorted(unknown)}')
     for r in runs_:
+        if args.merge:  # no fitting: only the people and their cameras are needed
+            continue
         load_mask_rois(r)
         log(f"[INFO] {r['seq']}: {len(r['tracks'])} people, Stage 1 {r['stage1']}"
             f"{' (held out)' if r['cam'].name in args.holdout else ''}")
     clip = f'_f{args.start}-{hi}' if args.num_frames else ''
     out_dir = args.out_dir or os.path.join(cc.OUTPUT_ROOT, 'mvfit', f'session{session}_batch{batch:02d}{clip}')
     os.makedirs(os.path.join(out_dir, 'world'), exist_ok=True)
+    parts_dir = os.path.join(out_dir, 'parts')
+    part = None
+    if args.part:
+        k, n = map(int, args.part.split('/'))
+        if not 0 <= k < n:
+            raise SystemExit(f'[ERROR] --part {args.part}: need 0 <= K < N')
+        part = (k, n)
+        os.makedirs(parts_dir, exist_ok=True)
 
-    sync = sync_check(runs_)
+    sync = sync_check(runs_) if not args.merge else {}
     for pair, s in sync.items():
         flag = '  <-- clearly smaller away from offset 0' if s['median_gap_cm_at_best'] < 0.8 * s['median_gap_cm_at_0'] else ''
         log(f"[INFO] sync {pair}: ray gap {s['median_gap_cm_at_0']} cm at offset 0, best "
@@ -365,6 +380,9 @@ def main() -> None:
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     head_pose, faces = load_mhr_head(OmegaConf.load(args.config), device)
+    if args.merge:
+        merge_and_export(args, out_dir, parts_dir, pids, tracks, runs_, head_pose, faces, device, t_start)
+        return
 
     starts = {}
     for pid in pids:
@@ -383,7 +401,10 @@ def main() -> None:
                'floor_start': {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in floor0.items()},
                'people': {}}
     fitted = {}
-    for pid in pids:
+    fit_pids = pids if part is None else pids[part[0]::part[1]]
+    if part is not None:
+        log(f'[INFO] part {part[0]}/{part[1]}: fitting {len(fit_pids)} of {len(pids)} people: {fit_pids}')
+    for pid in fit_pids:
         t0 = time.time()
         log(f'[INFO] person {pid}: fitting ({len(starts[pid].frames)} frames, '
             f'cameras {[t.cam.name + (" (held out)" if t.holdout else "") for t in tracks[pid]]})')
@@ -402,6 +423,51 @@ def main() -> None:
                 f"verts in mask {s.get('verts_in_mask', float('nan')):.3f} -> {f.get('verts_in_mask', float('nan')):.3f}")
         log(f"    accel {m_start['_body']['accel_mm_per_frame2']:.2f} -> {m_final['_body']['accel_mm_per_frame2']:.2f} "
             f"mm/frame^2; {time.time() - t0:.0f} s")
+        if part is not None:
+            torch.save(body_state(fitted[pid]), os.path.join(parts_dir, f'{pid}.pt'))
+    if part is not None:
+        with open(os.path.join(parts_dir, f'summary_{part[0]}.json'), 'w') as fh:
+            json.dump(summary, fh, indent=1, default=float)
+        log(f'[INFO] part {part[0]}/{part[1]} done in {time.time() - t_start:.0f} s -> {parts_dir}')
+        return
+    finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces, t_start)
+
+
+def body_state(b: mv_fit.Body) -> dict:
+    return {'frames': b.frames, 'g6d': b.g6d.cpu(), 'trans': b.trans.cpu(), 'pose': b.pose.cpu(), 'hand': b.hand.cpu(),
+            'face': b.face.cpu(), 'shape': b.shape.cpu(), 'scale': b.scale.cpu(), 'log_s': b.log_s.cpu(),
+            'best_cam': b.best_cam, 'n_views': b.n_views, 'stats': b.stats}
+
+
+def body_from_state(d: dict, device) -> mv_fit.Body:
+    t = {k: d[k].to(device) for k in ('g6d', 'trans', 'pose', 'hand', 'face', 'shape', 'scale', 'log_s')}
+    return mv_fit.Body(frames=d['frames'], best_cam=d['best_cam'], n_views=d['n_views'], stats=d['stats'], **t)
+
+
+def merge_and_export(args, out_dir, parts_dir, pids, tracks, runs_, head_pose, faces, device, t_start) -> None:
+    missing = [p for p in pids if not os.path.exists(os.path.join(parts_dir, f'{p}.pt'))]
+    if missing:
+        raise SystemExit(f'[ERROR] --merge: no fitted part for people {missing} in {parts_dir}')
+    fitted = {p: body_from_state(torch.load(os.path.join(parts_dir, f'{p}.pt'), weights_only=False), device)
+              for p in pids}
+    summary = None
+    for fn in sorted(os.listdir(parts_dir)):
+        if fn.startswith('summary_') and fn.endswith('.json'):
+            with open(os.path.join(parts_dir, fn)) as fh:
+                part_summary = json.load(fh)
+            if summary is None:
+                summary = part_summary
+            else:
+                summary['people'].update(part_summary['people'])
+    summary['args'] = dict(summary['args'], merged_parts=True)
+    log(f'[INFO] merged {len(fitted)} people from {parts_dir}')
+    finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces, t_start)
+
+
+def finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces, t_start) -> None:
+    session, batch = summary['session'], summary['batch']
+    hi = summary['frame_range'][1]
+    down = np.array([0.0, 0.0, 1.0])
 
     floor = mv_fit.fit_floor(head_pose, list(fitted.values()), down)
     Rf, o = floor_frame(floor)

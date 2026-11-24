@@ -15,6 +15,9 @@
 #   bash job_scripts/stage3_mvfit.sh -b 1 -session 2 -cams 01,03 -start 6000 -num_frames 600
 #   bash job_scripts/stage3_mvfit.sh -b 1 -session 2 -cams 01,02,03,04 -holdout 02     # leave-one-camera-out
 #   bash job_scripts/stage3_mvfit.sh -b 1 -session 2 -- --iters 300 --w-fill 5        # stage3_mvfit.py args
+# Full batches (~2 GPU-h per person on a GTX 1080 Ti): split the people over an array job, then merge:
+#   bash job_scripts/stage3_mvfit.sh -b 1 -session 2 -parts 8                           # -> job <id>, 8 tasks
+#   bash job_scripts/stage3_mvfit.sh -b 1 -session 2 -merge -sbatch "--dependency=afterok:<id>"
 #
 # Options:
 #   -b <spec>              batches: 1 | 1,3,5 | 3-5 (required)
@@ -23,6 +26,9 @@
 #   -holdout <MM,...>      cameras evaluated but not fitted
 #   -start <f> -num_frames <n>   batch frames [f, f + n) only (development clips)
 #   -label <name>          output folder name (default session<S>_batch<BB>[_f<a>-<b>])
+#   -parts <N>             array job of N tasks, task K fits every N-th person from K (stage3_mvfit.py --part K/N);
+#                          one batch only. Then -merge (same other options) collects them, fits the floor, exports.
+#   -merge                 the merge step of -parts (no fitting)
 #   -sbatch "<flags>"      extra sbatch flags
 #   -- <args>              passed on to stage3_mvfit.py
 set -euo pipefail
@@ -42,6 +48,8 @@ HOLDOUT=""
 START=""
 NUM_FRAMES=""
 LABEL=""
+PARTS=""
+MERGE=0
 PY_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     -start|--start)           START="${2:-}"; shift 2 ;;
     -num_frames|--num_frames) NUM_FRAMES="${2:-}"; shift 2 ;;
     -label|--label)           LABEL="${2:-}"; shift 2 ;;
+    -parts|--parts)           PARTS="${2:-}"; shift 2 ;;
+    -merge|--merge)           MERGE=1; shift ;;
     --)                       shift; PY_ARGS=("$@"); break ;;
     *)                        parse_common_args "$@"; shift "$COMMON_SHIFT" ;;
   esac
@@ -69,6 +79,12 @@ if [ -n "$CAMS" ]; then SESSION_CAMS="${CAMS//,/ }"; fi
 
 SEQS=()
 for bn in "${BATCH_NUMS[@]}"; do SEQS+=("$(printf 'session%d_batch%02d' "$SESSION" "$bn")"); done
+if [ -n "$PARTS" ]; then
+  [[ "$PARTS" =~ ^[1-9][0-9]*$ ]] || die "-parts must be a positive integer"
+  [ "$MERGE" = 0 ] || die "-parts and -merge are separate submissions"
+  [ ${#BATCH_NUMS[@]} -eq 1 ] || die "-parts needs exactly one batch"
+  EXTRA_SBATCH="--array=0-$((PARTS - 1)) $EXTRA_SBATCH"
+fi
 SIF_PATH=$SIF_PATH_CU128  # RTX Pro 6000 (Blackwell)
 self_submit stage3_mvfit "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
@@ -115,6 +131,11 @@ for bn in "${BATCH_NUMS[@]}"; do
   echo "=================================================================="
   HOLD=()
   [ ${#holdout[@]} -eq 0 ] || HOLD=(--holdout "${holdout[@]}")
+  if [ -n "$PARTS" ]; then
+    HOLD+=(--part "${SLURM_ARRAY_TASK_ID:-0}/$PARTS")
+  elif [ "$MERGE" = 1 ]; then
+    HOLD+=(--merge)
+  fi
   if run_in_container stage3_mvfit.py "${inputs[@]}" --out-dir "$(host_to_container "$out")" --config "$CONFIG" \
       ${CLIP[@]+"${CLIP[@]}"} ${HOLD[@]+"${HOLD[@]}"} ${PY_ARGS[@]+"${PY_ARGS[@]}"}; then
     echo "[INFO] batch $bn done."
