@@ -14,3 +14,7 @@ img_vid_concat.py
 build/
 mhr_smpl_conversion/
 imgui.ini
+
+# multi-view plan/progress notes: symlinks to /tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d/
+plan_multiview.md
+MULTIVIEW_PROGRESS.md
