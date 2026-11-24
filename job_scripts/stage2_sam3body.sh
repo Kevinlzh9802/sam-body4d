@@ -14,6 +14,7 @@
 #   bash job_scripts/stage2_sam3body.sh -all cam06
 #   bash job_scripts/stage2_sam3body.sh -dataset conflab 228
 #   bash job_scripts/stage2_sam3body.sh -dataset conflab -all 2
+#   bash job_scripts/stage2_sam3body.sh -fisheye -cam 1 -b 1            # multi-view pipeline input
 #
 # Split one sequence into parallel jobs of 6000 frames each (frames
 # [0,6000), [6000,12000), [12000,18000)); the last part to finish merges them
@@ -31,6 +32,10 @@
 #   -part <p1|p2|p3|merge>       split run; needs exactly one sequence
 #   -batch_size <n>              frames per inference call (default 16, peaks at ~56 GB
 #                                GPU memory; use 8 on a 48 GB A40/L40)
+#   -fisheye                     cosilab multi-view pipeline: per-person virtual pinhole crops of the
+#                                fisheye calibration (stage2_sam3body.py --fisheye) -> $FISHEYE_RAW_DIR/<seq>/
+#                                under the multi-view root (lib/dataset.sh MV_ROOT); Stage 1 from the
+#                                annotated cameras' folder, else from the multi-view pipeline's (extra cameras)
 #
 # On DAIC this runs on an RTX Pro 6000 (Blackwell) with the CUDA 12.8 image
 # ($SIF_PATH_CU128, built with apptainer/build.sh cu128).
@@ -48,6 +53,7 @@ source "$SB4D_CODE/job_scripts/lib/common.sh"
 ORIG_ARGS=("$@")
 PART=""
 BATCH_SIZE=""
+FISHEYE=0
 FRAMES_PER_PART=6000
 
 while [[ $# -gt 0 ]]; do
@@ -59,6 +65,10 @@ while [[ $# -gt 0 ]]; do
     -batch_size|--batch_size|--batch-size)
       BATCH_SIZE="${2:-}"
       shift 2
+      ;;
+    -fisheye|--fisheye)
+      FISHEYE=1
+      shift
       ;;
     *)
       parse_common_args "$@"
@@ -92,6 +102,10 @@ BATCH_ARGS=()
 [ "$CLUSTER" != daic ] || SIF_PATH=$SIF_PATH_CU128
 
 load_dataset "$DATASET_ARG"
+if [ "$FISHEYE" = 1 ]; then
+  load_mv_dirs
+  RAW_DIR=$FISHEYE_RAW_DIR
+fi
 resolve_seqs "$STAGE1_DIR"
 if [ -n "$PART" ] && [ ${#SEQS[@]} -ne 1 ]; then
   die "-part needs exactly one sequence, got ${#SEQS[@]}: ${SEQS[*]}"
@@ -116,6 +130,7 @@ for seq in "${SEQS[@]}"; do
   echo "=================================================================="
 
   folder="$STAGE1_DIR/$seq"
+  [ "$FISHEYE" = 0 ] || folder="$(seq_stage1_dir "$seq")"
   if [ ! -d "$folder" ]; then
     echo "[ERROR] Folder does not exist: $folder" >&2
     failed=$((failed + 1))
@@ -124,7 +139,11 @@ for seq in "${SEQS[@]}"; do
   fi
 
   intrinsics="$(seq_intrinsics "$seq")"
-  if [ ! -f "$intrinsics" ]; then
+  CAMERA_ARGS=(--intrinsic-path "$(host_to_container "$intrinsics")")
+  if [ "$FISHEYE" = 1 ]; then
+    CAMERA_ARGS=(--fisheye)  # the 4TU idiap_params calibration of the camera (utils/cosilab_camera.py)
+    intrinsics="idiap_params (fisheye)"
+  elif [ ! -f "$intrinsics" ]; then
     echo "[ERROR] Intrinsics file not found: $intrinsics" >&2
     failed=$((failed + 1))
     echo ""
@@ -134,6 +153,7 @@ for seq in "${SEQS[@]}"; do
   # A separate output dir makes stage2_sam3body.py treat the input as read-only
   OUTPUT_ARGS=()
   out_folder="$RAW_DIR/$seq"
+  [ "$FISHEYE" = 0 ] || guard_mv_output "$out_folder"
   if [ "$out_folder" != "$folder" ]; then
     [ "${SB4D_DRY_RUN:-0}" = 1 ] || mkdir -p "$out_folder"
     OUTPUT_ARGS=(--output-dir "$(host_to_container "$out_folder")")
@@ -147,7 +167,7 @@ for seq in "${SEQS[@]}"; do
   if run_in_container stage2_sam3body.py \
     --input "$(host_to_container "$folder")" \
     ${OUTPUT_ARGS[@]+"${OUTPUT_ARGS[@]}"} \
-    --intrinsic-path "$(host_to_container "$intrinsics")" \
+    "${CAMERA_ARGS[@]}" \
     --config "$CONFIG" \
     ${BATCH_ARGS[@]+"${BATCH_ARGS[@]}"} \
     ${PART_ARGS[@]+"${PART_ARGS[@]}"}; then

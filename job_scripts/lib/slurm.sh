@@ -7,7 +7,7 @@
 
 # Builds SBATCH_FLAGS for <stage> on $CLUSTER.
 # Stages: stage1, stage2 (full sequence), stage2_part (one -part), stage2_merge, stage3,
-# stage3_multiview.
+# stage3_mvfit, mv_segments, mv_prompts (prompts and the masklet ID check), mv_stage1.
 #
 # DAIC (new environment, https://doc.daic.tudelft.nl/tutorials/slurm/): GPUs by
 # full type name. Stage 2 uses an RTX Pro 6000 (96 GB, Blackwell), which needs
@@ -23,8 +23,8 @@
 # Time limits: one Stage 1 job and one Stage 2 part (6000 frames) finish within
 # 20 h; Stage 3 on CPU took ~70 s for 3000 person-frames locally, ~1-2 h
 # extrapolated to a full cosilab batch (~200k person-frames), so 8 h leaves room.
-# stage3_multiview runs Stage 3 (camera space) for up to 5 cameras one after the
-# other, then the multi-view step (reads/writes every mesh once): 24 h.
+# stage3_mvfit fits all people of one session and batch on one GPU; its time on a full batch is not measured yet
+# (MHR forward+backward ~0.7 ms per body on a GTX 1080 Ti, x frames x iterations), so 24 h is a guess.
 # Partition "all" (the department partition ewi-insy is not open to this user).
 # Account: $SB4D_ACCOUNT, default daic-eemcs-insy-prb (verified with sbatch --test-only).
 sbatch_flags() {
@@ -36,7 +36,11 @@ sbatch_flags() {
     stage2_part)  time=20:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=20:00:00;   daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_merge) time=0:30:00;  partition=compute;  cpus=2;  mem_per_cpu=16000M; daic_time=0:30:00;    daic_cpus=2;  daic_mem=32G;  daic_gpu="" ;;
     stage3)       time=8:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=8:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
-    stage3_multiview) time=24:00:00; partition=compute; cpus=16; mem_per_cpu=4000M; daic_time=24:00:00; daic_cpus=16; daic_mem=64G; daic_gpu="" ;;
+    # multi-view pipeline (DAIC only): MHR fit on a GPU; extra cameras' steps (mv_extra_cams.sh)
+    stage3_mvfit) time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=24:00:00;   daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    mv_segments)  time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=8:00:00;    daic_cpus=4;  daic_mem=16G;  daic_gpu="" ;;
+    mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=4:00:00;    daic_cpus=8;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    mv_stage1)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1-00:00:00; daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 

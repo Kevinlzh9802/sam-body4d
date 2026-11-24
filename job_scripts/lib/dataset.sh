@@ -125,3 +125,44 @@ seq_extrinsics() {
     echo "$CAMERA_DIR/extrinsics/extrinsic_cam_$(seq_cam "$1").json"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Multi-view pipeline (cosilab on DAIC): stage2_sam3body.sh -fisheye, stage3_mvfit.sh, mv_extra_cams.sh.
+# Everything it writes goes under MV_ROOT, the only writable place on /tudelft.net for it (the neon umbrella is
+# full); the 4TU upload, data_temp and the Video-OnlineHMR side-camera timestamps are read-only inputs. These paths
+# are mounted at the same place inside the container, where utils/cosilab_camera.py expects them.
+#   FISHEYE_RAW_DIR  Stage 2 --fisheye output, <seq>/raw_mhr.pt
+#   MVFIT_DIR        stage3_mvfit.py output, session<S>_batch<BB>[_f<a>-<b>]/
+#   MV_VIDEO_DIR, MV_ANNOT_DIR, MV_STAGE1_DIR   cameras without annotations (02, 04, 07, 09, 12-15): segments made
+#                    from the raw GoPro files, projected prompts, and their Stage 1 output
+# ---------------------------------------------------------------------------
+MV_ROOT="${SB4D_MV_ROOT:-/tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d}"
+VOH_SIDE_TIMESTAMPS=/tudelft.net/staff-umbrella/neon/experiments/Video-OnlineHMR/cosilab_side_timestamps
+
+load_mv_dirs() {
+  [ "$DATASET" = cosilab ] || die "The multi-view pipeline is for cosilab"
+  [ "$CLUSTER" = daic ] || die "The multi-view pipeline runs on DAIC (it reads the cosilab project and $MV_ROOT)"
+  FISHEYE_RAW_DIR=$MV_ROOT/mhr_raw_fisheye
+  MVFIT_DIR=$MV_ROOT/mvfit
+  MV_VIDEO_DIR=$MV_ROOT/video_segs_10s
+  MV_ANNOT_DIR=$MV_ROOT/video_frame_annotations
+  MV_STAGE1_DIR=$MV_ROOT/sam3_output
+  EXTRA_BINDS+=(
+    "$COSILAB_PROJECT_HOST:$COSILAB_PROJECT_HOST:ro"
+    "$VOH_SIDE_TIMESTAMPS:$VOH_SIDE_TIMESTAMPS:ro"
+    "$MV_ROOT:$MV_ROOT"
+  )
+}
+
+# Refuses an output path on /tudelft.net outside MV_ROOT.
+guard_mv_output() {
+  case "$(realpath -m "$1")" in
+    "$MV_ROOT"|"$MV_ROOT"/*) ;;
+    /tudelft.net/*) die "Refusing to write to $1: on /tudelft.net the multi-view pipeline writes only under $MV_ROOT" ;;
+  esac
+}
+
+# Stage 1 folder of a sequence: the annotated cameras' (STAGE1_DIR), else the multi-view pipeline's (MV_STAGE1_DIR).
+seq_stage1_dir() {
+  if [ -d "$STAGE1_DIR/$1" ]; then echo "$STAGE1_DIR/$1"; else echo "$MV_STAGE1_DIR/$1"; fi
+}
