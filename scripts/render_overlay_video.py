@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import sys
 import time
@@ -43,6 +44,7 @@ if REPO_DIR not in sys.path:
 from scripts.view_stage3 import person_color, read_run_options
 from smoothing.ground_plane_opt import load_extrinsics_json
 from smoothing.reproj_overlay_plot import PRIMARY_KPS, SKELETON, _bgr, _project, _rasterize_mesh
+from utils import fisheye
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.id_mapping import find_segment_for_frame, load_segment_id_mappings
 
@@ -98,10 +100,20 @@ def stage1_dir_of(stage3_dir: str, opts: Dict[str, str]) -> str:
     return os.path.dirname(opts.get("raw", stage3_dir))
 
 
+def _projector(K: np.ndarray, D: Optional[np.ndarray]):
+    """Camera points (N, 3) -> pixels: pinhole K, or the OpenCV fisheye model with D (stage3_mvfit.py outputs)."""
+    if D is None:
+        return lambda X: _project(K, X)
+    return lambda X: fisheye.project_np(X, K, D)
+
+
 def _person_layers(job) -> Tuple[int, Dict[str, Layer]]:
     """Pass 1, one person (worker process): silhouette and joints per frame."""
-    path, pid, K, to_cam, h, w, chunk = job
+    path, pid, K, D, to_cam, h, w, chunk, camera = job
+    proj = _projector(K, D)
     with np.load(path) as z:
+        if camera and "cameras" in z.files and camera not in set(map(str, z["cameras"])):
+            return pid, {}  # a world body (stage3_mvfit.py) of someone this camera never saw
         names = [str(n) for n in z["frame_names"]]
         kps = z["keypoints"][:, list(PRIMARY_KPS)].astype(np.float64) if "keypoints" in z.files else None
         faces = z["faces"]
@@ -116,12 +128,12 @@ def _person_layers(job) -> Tuple[int, Dict[str, Layer]]:
         if to_cam is not None:
             block = (block @ R.T + t) / ws
         for v in block:
-            sil = _rasterize_mesh(_project(K, v), faces, v[:, 2], h, w)
+            sil = _rasterize_mesh(proj(v), faces, v[:, 2], h, w)
             cnts, _ = cv2.findContours(sil, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
             uv = np.full((len(PRIMARY_KPS), 2), np.nan, dtype=np.float32)
             if kps is not None:
                 front = kps[i, :, 2] > 0.01
-                uv[front] = _project(K, kps[i, front])
+                uv[front] = proj(kps[i, front])
             layers[names[i]] = ([c.astype(np.int16) for c in cnts], uv)
             i += 1
     return pid, layers
@@ -208,15 +220,20 @@ def render_overlay_video(stage3_dir: str, stage1_dir: Optional[str] = None, out_
     out_path = out_path or os.path.join(stage3_dir, VIDEO_NAME)
     images = Stage1Frames(stage1_dir, "images", (".jpg", ".jpeg", ".png", ".bmp"))
     masks = Stage1Frames(stage1_dir, "masks", (".png", ".bmp"))
-    mesh_dir = os.path.join(stage3_dir, "meshes_4d_individual")
+    # stage3_mvfit.py: one world body per person, shared by every camera (mesh_dir in the run options)
+    mesh_dir = opts.get("mesh_dir") or os.path.join(stage3_dir, "meshes_4d_individual")
     paths = {int(fn[:-4]): os.path.join(mesh_dir, fn) for fn in sorted(os.listdir(mesh_dir))
              if fn.endswith(".npz")} if os.path.isdir(mesh_dir) else {}
     if not images.names or not paths:
         print(f"[INFO] Overlay video skipped: {'no meshes in ' + mesh_dir if images.names else 'no Stage 1 images in ' + stage1_dir}")
         return None
 
-    K, _ = read_camera_intrinsics_new(opts["camera_intrinsics_json"])
-    K = adjust_K(K, scale=float(opts.get("camera_scale", 0.5)))
+    D = None
+    if opts.get("camera_model") == "fisheye":  # K, D already at the Stage 1 image size
+        K, D = np.array(json.loads(opts["fisheye_K"])), np.array(json.loads(opts["fisheye_D"]))
+    else:
+        K, _ = read_camera_intrinsics_new(opts["camera_intrinsics_json"])
+        K = adjust_K(K, scale=float(opts.get("camera_scale", 0.5)))
     to_cam = None
     if opts.get("export_camera_space") != "True" and opts.get("extrinsics_json", "None") != "None":
         e = load_extrinsics_json(opts["extrinsics_json"], device=torch.device("cpu"))
@@ -226,7 +243,7 @@ def render_overlay_video(stage3_dir: str, stage1_dir: Optional[str] = None, out_
     h, w = first.shape[:2]
 
     # Pass 1: per person, silhouettes and joints (in parallel over the people)
-    jobs = [(p, pid, K, to_cam, h, w, chunk) for pid, p in paths.items()]
+    jobs = [(p, pid, K, D, to_cam, h, w, chunk, opts.get("camera")) for pid, p in paths.items()]
     workers = max(1, min(len(jobs), workers or len(os.sched_getaffinity(0))))
     if workers > 1:
         with get_context("fork").Pool(workers) as pool:
