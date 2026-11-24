@@ -18,7 +18,8 @@ Steps:
      reference camera (cam06 / cam01), x along the reference camera's x
 
 Output (--out-dir, default <SB4D_OUTPUT_ROOT>/mvfit/session<S>_batch<BB>[_f<start>-<end>]):
-  world/<pid>.npz            the body once per person: vertices (T, V, 3) float32 cm (unless --no-vertices), mhr70
+  world/<pid>.npz            the body once per person: vertices (T, V, 3) float32 cm only with --save-vertices
+                             (~4 GB per person and batch; utils/world_bodies.py re-poses them from the params), mhr70
                              keypoints (T, 70, 3) cm, faces, frame_names (batch frames, '%08d'), params (g_world
                              (T, 3, 3) in the floor frame, trans_cm, body_pose, hand, face, shape, scale), cameras
   cameras/<camXX_batchBB>/   per camera: stage3_run_options.txt (fisheye camera, Stage 1 folder, mesh_dir = world/),
@@ -314,7 +315,8 @@ def main() -> None:
     ap.add_argument('--min-frames', type=int, default=10, help='shorter person/camera tracks are dropped')
     ap.add_argument('--config', default=os.path.join(REPO_DIR, 'configs', 'body4d.yaml'))
     ap.add_argument('--world-scale', type=float, default=100.0, help='world units per metre (100 = cm)')
-    ap.add_argument('--no-vertices', action='store_true', help='world/<pid>.npz without vertices (no overlay video)')
+    ap.add_argument('--save-vertices', action='store_true',
+                    help='also store the vertices in world/<pid>.npz (large; by default they are re-posed when needed)')
     ap.add_argument('--no-video', action='store_true')
     ap.add_argument('--no-floor-term', action='store_true', help='w_floor = 0')
     for k, v in vars(FitConfig()).items():
@@ -413,7 +415,7 @@ def main() -> None:
     for pid in pids:
         summary['people'][str(pid)]['export'] = export_person(
             os.path.join(out_dir, 'world', f'{pid}.npz'), head_pose, fitted[pid], Rf, o, ws, faces,
-            [t.cam.name for t in tracks[pid]], not args.no_vertices)
+            [t.cam.name for t in tracks[pid]], args.save_vertices)
 
     source = f'stage3_mvfit.py: idiap_params calibration, floor fitted to the people (session {session}, batch {batch})'
     extr = {r['cam'].name: camera_json(r['cam'], Rf, o, ws, source) for r in runs_}
@@ -429,11 +431,11 @@ def main() -> None:
                                                                 f"extrinsic_{r['cam'].name.replace('cam', 'cam_')}.json")),
                 'export_camera_space': False, 'world_scale': ws, 'camera_model': 'fisheye',
                 'fisheye_K': json.dumps(r['cam'].K.tolist()), 'fisheye_D': json.dumps(r['cam'].D.tolist()),
-                'camera_scale': 1.0, 'frame_range': f'{args.start} {hi}'}
+                'camera_scale': 1.0, 'frame_range': f'{args.start} {hi}', 'config': os.path.abspath(args.config)}
         with open(os.path.join(cdir, 'stage3_run_options.txt'), 'w') as fh:
             for k, v in opts.items():
                 fh.write(f'{k}: {v}\n')
-        if not args.no_video and not args.no_vertices:
+        if not args.no_video:
             try:
                 render_overlay_video(cdir)
             except Exception as e:  # the fit is saved; the video is a convenience

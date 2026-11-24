@@ -32,6 +32,7 @@
 #   -part <p1|p2|p3|merge>       split run; needs exactly one sequence
 #   -batch_size <n>              frames per inference call (default 16, peaks at ~56 GB
 #                                GPU memory; use 8 on a 48 GB A40/L40)
+#   -frames <first>-<last>       only these batch frames (e.g. 6000-6599, one 10 s segment; development clips)
 #   -fisheye                     cosilab multi-view pipeline: per-person virtual pinhole crops of the
 #                                fisheye calibration (stage2_sam3body.py --fisheye) -> $FISHEYE_RAW_DIR/<seq>/
 #                                under the multi-view root (lib/dataset.sh MV_ROOT); Stage 1 from the
@@ -54,6 +55,7 @@ ORIG_ARGS=("$@")
 PART=""
 BATCH_SIZE=""
 FISHEYE=0
+FRAMES=""
 FRAMES_PER_PART=6000
 
 while [[ $# -gt 0 ]]; do
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
     -fisheye|--fisheye)
       FISHEYE=1
       shift
+      ;;
+    -frames|--frames)
+      FRAMES="${2:-}"
+      shift 2
       ;;
     *)
       parse_common_args "$@"
@@ -97,6 +103,11 @@ esac
 
 BATCH_ARGS=()
 [ -z "$BATCH_SIZE" ] || BATCH_ARGS=(--batch-size "$BATCH_SIZE")
+if [ -n "$FRAMES" ]; then
+  [[ "$FRAMES" =~ ^([0-9]+)-([0-9]+)$ ]] || die "-frames must be <first>-<last>, got: $FRAMES"
+  [ -z "$PART" ] || die "-frames and -part don't go together"
+  BATCH_ARGS+=(--frame-numbers "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+fi
 
 # Blackwell GPUs need torch built for CUDA >= 12.8
 [ "$CLUSTER" != daic ] || SIF_PATH=$SIF_PATH_CU128

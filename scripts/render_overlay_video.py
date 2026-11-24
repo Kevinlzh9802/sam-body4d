@@ -39,8 +39,9 @@ import torch
 from PIL import Image
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_DIR not in sys.path:
-    sys.path.insert(0, REPO_DIR)
+for _p in (REPO_DIR, os.path.join(REPO_DIR, "models", "sam_3d_body")):  # the latter for re-posing with MHR
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from scripts.view_stage3 import person_color, read_run_options
 from smoothing.ground_plane_opt import load_extrinsics_json
@@ -101,6 +102,11 @@ def stage1_dir_of(stage3_dir: str, opts: Dict[str, str]) -> str:
     return os.path.dirname(opts.get("raw", stage3_dir))
 
 
+def _has_vertices(path: str) -> bool:
+    with zipfile.ZipFile(path) as zf:
+        return "vertices.npy" in zf.namelist()
+
+
 def _projector(K: np.ndarray, D: Optional[np.ndarray]):
     """Camera points (N, 3) -> pixels: pinhole K, or the OpenCV fisheye model with D (stage3_mvfit.py outputs)."""
     if D is None:
@@ -138,6 +144,49 @@ def _person_layers(job) -> Tuple[int, Dict[str, Layer]]:
             layers[names[i]] = ([c.astype(np.int16) for c in cnts], uv)
             i += 1
     return pid, layers
+
+
+def _frame_layer(job) -> Tuple[str, Layer]:
+    """Silhouette and joints of one person in one frame (worker process); v, kps in camera metres."""
+    name, v, kps, K, D, faces, h, w = job
+    proj = _projector(K, D)
+    sil = _rasterize_mesh(proj(v), faces, v[:, 2], h, w)
+    cnts, _ = cv2.findContours(sil, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    uv = np.full((len(PRIMARY_KPS), 2), np.nan, dtype=np.float32)
+    front = kps[:, 2] > 0.01
+    uv[front] = proj(kps[front])
+    return name, ([c.astype(np.int16) for c in cnts], uv)
+
+
+def _reposed_layers(paths: Dict[int, str], K, D, to_cam, h, w, chunk, camera, workers, cfg_path
+                    ) -> Dict[int, Dict[str, Layer]]:
+    """Pass 1 for stage3_mvfit.py world bodies stored without vertices: this process re-poses each person with MHR,
+    chunk by chunk, and a pool rasterises the frames of the chunk."""
+    from omegaconf import OmegaConf
+    from utils.mhr_only import load_mhr_head
+    from utils.world_bodies import WorldBody
+    R, t, ws = to_cam
+    out: Dict[int, Dict[str, Layer]] = {}
+    with get_context("fork").Pool(workers) as pool:  # forked before CUDA is initialised in this process
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        head, _ = load_mhr_head(OmegaConf.load(cfg_path), device)
+        for pid, path in paths.items():
+            body = WorldBody(pid, path)
+            if camera and camera not in set(map(str, body.p.get("cameras", []))):
+                continue
+            with np.load(path) as z:
+                faces = z["faces"]
+            names = [f"{f:08d}" for f in body.frames]
+            layers: Dict[str, Layer] = {}
+            for start in range(0, len(names), chunk):
+                rows = np.arange(start, min(start + chunk, len(names)))
+                v, k = body.floor_points(head, rows, device)
+                v = (v.cpu().numpy().astype(np.float64) @ R.T + t) / ws
+                k = (k[:, list(PRIMARY_KPS)].cpu().numpy().astype(np.float64) @ R.T + t) / ws
+                jobs = [(names[r], v[i], k[i], K, D, faces, h, w) for i, r in enumerate(rows)]
+                layers.update(pool.imap_unordered(_frame_layer, jobs, chunksize=8))
+            out[pid] = layers
+    return out
 
 
 class VideoWriter:
@@ -246,7 +295,15 @@ def render_overlay_video(stage3_dir: str, stage1_dir: Optional[str] = None, out_
     # Pass 1: per person, silhouettes and joints (in parallel over the people)
     jobs = [(p, pid, K, D, to_cam, h, w, chunk, opts.get("camera")) for pid, p in paths.items()]
     workers = max(1, min(len(jobs), workers or len(os.sched_getaffinity(0))))
-    if workers > 1:
+    reposed = None
+    if not all(_has_vertices(p) for p in paths.values()):
+        if to_cam is None:
+            raise ValueError("bodies without vertices need world extrinsics (stage3_mvfit.py output)")
+        reposed = _reposed_layers(paths, K, D, to_cam, h, w, chunk, opts.get("camera"), workers,
+                                  opts.get("config") or os.path.join(REPO_DIR, "configs", "body4d.yaml"))
+    if reposed is not None:
+        per_person = reposed
+    elif workers > 1:
         with get_context("fork").Pool(workers) as pool:
             per_person = dict(pool.imap_unordered(_person_layers, jobs))
     else:

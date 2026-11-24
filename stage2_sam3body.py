@@ -316,6 +316,9 @@ def main() -> None:
     parser.add_argument("--part-label", default=None,
                         help="Label for this part (default: auto from frame range). "
                              "Output goes to <output-dir>/raw_mhr_parts/raw_mhr_part_<label>.pt")
+    parser.add_argument("--frame-numbers", type=int, nargs=2, default=None, metavar=("FIRST", "LAST"),
+                        help="only Stage 1 frames named FIRST..LAST (batch frame numbers, inclusive), e.g. 6000 6599 "
+                             "for a 10 s development clip; output is a normal raw_mhr.pt")
     # Merge mode
     parser.add_argument("--merge", action="store_true",
                         help="Merge all raw_mhr_part_*.pt in <output-dir>/raw_mhr_parts/ into raw_mhr.pt and exit.")
@@ -357,8 +360,13 @@ def main() -> None:
     n_images = len(images_list)
     images_list = [p for p in images_list if Path(p).stem in mask_by_name]
     masks_list = [mask_by_name[Path(p).stem] for p in images_list]
+    if args.frame_numbers is not None:
+        lo, hi = args.frame_numbers
+        images_list = [p for p in images_list if lo <= int(Path(p).stem) <= hi]
+        masks_list = [mask_by_name[Path(p).stem] for p in images_list]
+        print(f"[INFO] --frame-numbers {lo}-{hi}: {len(images_list)} frames")
     n_total = len(images_list)
-    if n_total < n_images:
+    if n_total < n_images and args.frame_numbers is None:
         print(f"[WARN] {n_images - n_total} image(s) have no mask with the same frame name; skipped.")
     if n_total == 0:
         raise FileNotFoundError("Found no images or masks to process.")
