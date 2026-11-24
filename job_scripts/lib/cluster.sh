@@ -9,7 +9,7 @@
 # Jobs always run the single checkout at CODE_HOST (no code snapshots); the
 # launchers refuse to start from any other copy. SB4D_CODE_HOST overrides it
 # (e.g. for dry runs elsewhere). On DAIC it depends on the user: zli33's home, or
-# $MV_ROOT/code/sam-body4d for everyone else.
+# ~/linuxhome/sam-body4d for everyone else.
 #
 # Container mount points are identical on both clusters so paths stored in
 # outputs (e.g. raw_mhr.pt meta.input_dir) stay valid across clusters:
@@ -27,8 +27,7 @@ detect_cluster() {
 
 CLUSTER="${SB4D_CLUSTER:-$(detect_cluster)}"
 
-# Multi-view pipeline output root on DAIC (lib/dataset.sh); also holds the code checkout and the SLURM logs of
-# DAIC users other than zli33, since that is the only place on /tudelft.net they write to.
+# Multi-view pipeline output root on DAIC (lib/dataset.sh); also holds the SLURM logs of DAIC users other than zli33.
 MV_ROOT="${SB4D_MV_ROOT:-/tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d}"
 
 case "$CLUSTER" in
@@ -45,8 +44,8 @@ case "$CLUSTER" in
       CODE_HOST=/home/zli33/linuxhome/projects/sam-body4d
       LOG_DIR=/home/zli33/linuxhome/slurm_outputs/sam_4d_body
     else
-      # e.g. edortaperez: checkout of the multiview-fit branch and logs under MV_ROOT
-      CODE_HOST=$MV_ROOT/code/sam-body4d
+      # e.g. edortaperez: checkout in the user's linuxhome, logs under MV_ROOT
+      CODE_HOST=$HOME/linuxhome/sam-body4d
       LOG_DIR=$MV_ROOT/logs
     fi
     DATA_BASE_HOST=$NEON_HOST/zonghuan/data
