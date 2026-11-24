@@ -110,7 +110,7 @@ if [ -n "$FRAMES" ]; then
 fi
 
 # Blackwell GPUs need torch built for CUDA >= 12.8
-[ "$CLUSTER" != daic ] || SIF_PATH=$SIF_PATH_CU128
+use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
 
 load_dataset "$DATASET_ARG"
 if [ "$FISHEYE" = 1 ]; then

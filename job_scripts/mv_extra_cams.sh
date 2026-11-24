@@ -69,7 +69,7 @@ case "$STEP" in
   *)        die "-step must be segments, prompts, stage1 or idcheck" ;;
 esac
 resolve_seqs "$STAGE1_DIR"
-[ "$STAGE" = mv_segments ] || SIF_PATH=$SIF_PATH_CU128  # RTX Pro 6000 (Blackwell)
+[ "$STAGE" = mv_segments ] || use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
 self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  code: $SB4D_CODE  step $STEP  sequences ${SEQS[*]}"

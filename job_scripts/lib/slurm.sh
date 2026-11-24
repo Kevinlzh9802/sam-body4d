@@ -70,7 +70,8 @@ sbatch_flags() {
       --cpus-per-task="$daic_cpus"
       --mem="$daic_mem"
     )
-    [ -z "$daic_gpu" ] || SBATCH_FLAGS+=(--gres="gpu:$daic_gpu:1")
+    # SB4D_GPU (e.g. nvidia_a40, nvidia_l40) replaces the GPU type of GPU stages; see use_gpu_image (lib/cluster.sh)
+    [ -z "$daic_gpu" ] || SBATCH_FLAGS+=(--gres="gpu:${SB4D_GPU:-$daic_gpu}:1")
   fi
 }
 

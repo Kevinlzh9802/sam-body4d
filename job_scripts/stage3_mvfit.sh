@@ -85,7 +85,7 @@ if [ -n "$PARTS" ]; then
   [ ${#BATCH_NUMS[@]} -eq 1 ] || die "-parts needs exactly one batch"
   EXTRA_SBATCH="--array=0-$((PARTS - 1)) $EXTRA_SBATCH"
 fi
-SIF_PATH=$SIF_PATH_CU128  # RTX Pro 6000 (Blackwell)
+use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
 self_submit stage3_mvfit "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  code: $SB4D_CODE  session $SESSION  batches ${BATCH_NUMS[*]}"

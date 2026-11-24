@@ -70,3 +70,12 @@ LOG_DIR="${LOG_DIR:-$CODE_HOST/logs}"
 
 BIND_CODE=/mnt/sam-body4d
 BIND_MODEL=/mnt/sam4d_checkpoints
+
+# GPU stages on DAIC: the CUDA 12.8 image for the default RTX Pro 6000 (Blackwell), the CUDA 11.8 one when SB4D_GPU
+# picks an older GPU (nvidia_a40, nvidia_l40: often free when the RTX Pro 6000s are queued).
+use_gpu_image() {
+  [ "$CLUSTER" = daic ] || return 0
+  case "${SB4D_GPU:-nvidia_rtx_pro_6000}" in
+    nvidia_rtx_pro_6000) SIF_PATH=$SIF_PATH_CU128 ;;
+  esac
+}
