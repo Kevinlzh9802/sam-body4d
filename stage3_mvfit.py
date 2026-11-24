@@ -324,6 +324,8 @@ def main() -> None:
                     help='also store the vertices in world/<pid>.npz (large; by default they are re-posed when needed)')
     ap.add_argument('--no-video', action='store_true')
     ap.add_argument('--no-floor-term', action='store_true', help='w_floor = 0')
+    ap.add_argument('--no-smooth-post', action='store_true', help='no Hampel + Gaussian of the fitted bodies')
+    ap.add_argument('--no-smooth-start', action='store_true', help='no smoothing of the start bodies')
     for k, v in vars(FitConfig()).items():
         if isinstance(v, bool):
             continue
@@ -332,6 +334,8 @@ def main() -> None:
     cfg = FitConfig(**{k: getattr(args, k) for k in vars(FitConfig()) if hasattr(args, k)})
     if args.no_floor_term:
         cfg.w_floor = 0.0
+    cfg.smooth_post = not args.no_smooth_post
+    cfg.smooth_start = not args.no_smooth_start
     t_start = time.time()
 
     hi = args.start + args.num_frames if args.num_frames else 10 ** 9

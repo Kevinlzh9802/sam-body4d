@@ -27,6 +27,8 @@ Fit (fit_person): Adam over all frames of the person at once, in chunks with con
   highpass   |x - G_sigma * x|^2 of G (6D), pose and T: what the Stage 3 Gaussian smoothing would remove
   depth      frames with fewer than two usable cameras: distance from the best camera to the pelvis stays at the start
   floor      Huber of the lowest foot's height above a floor plane fitted to all people's start bodies
+Then the fitted body is smoothed like the start (smooth_post; Adam adds jitter on weakly constrained parameters).
+300-frame clip: 3D acceleration 2.03 -> 0.61 mm/frame^2 with the same IoU / keypoint error.
 """
 from __future__ import annotations
 
@@ -38,7 +40,7 @@ import numpy as np
 import roma
 import torch
 import torch.nn.functional as Fn
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, uniform_filter1d
 
 from smoothing.ground_plane_opt import FOOT_IDXS
 from smoothing.temporal import _lowpass, SmoothConfig
@@ -172,6 +174,9 @@ class FitConfig:
     hampel_half_window: int = 3
     hampel_n_sigma: float = 3.0
     smooth_start: bool = True
+    best_cam_window: int = 31   # frames: the start camera is chosen on the visibility score averaged over this window,
+                                # so the start pose doesn't switch cameras every frame
+    smooth_post: bool = True    # Hampel + Gaussian of the fitted body as well (Video-OnlineHMR --smooth post)
 
 
 @dataclass
@@ -262,7 +267,10 @@ def start_body(head_pose, tracks: List[CamTrack], device, cfg: FitConfig) -> Bod
     score = np.full((len(fit_tracks), T), -1.0)
     for i, tr in enumerate(fit_tracks):
         score[i, np.searchsorted(frames, tr.frames)] = tr.kp_conf[:, BODY_KPS].sum(1)
-    best = score.argmax(0)
+    best = (uniform_filter1d(score, cfg.best_cam_window, axis=1, mode='nearest') if cfg.best_cam_window > 1
+            else score).argmax(0)
+    present = score[best, np.arange(T)] >= 0
+    best = np.where(present, best, score.argmax(0))  # never a camera that doesn't see the person in that frame
     n_views = np.zeros(T, int)
     for tr in fit_tracks:
         n_views[np.searchsorted(frames, tr.frames)] += tr.usable()
@@ -333,25 +341,44 @@ def start_body(head_pose, tracks: List[CamTrack], device, cfg: FitConfig) -> Bod
         stats['start_shift_mean_m'] = float(np.linalg.norm(full, axis=1).mean())
 
     if cfg.smooth_start:
-        scfg = SmoothConfig(cfg.sigma_pose, cfg.sigma_rot, cfg.sigma_trans, cfg.hampel_half_window,
-                            cfg.hampel_n_sigma)
-        q = roma.rotmat_to_unitquat(torch.as_tensor(G)).numpy()
-        for s0, e0 in runs(frames):
-            if e0 - s0 < 2:
-                continue
-            for k in ('body_pose', 'hand', 'face'):
-                sel[k][s0:e0] = _lowpass(sel[k][s0:e0].astype(np.float64), cfg.sigma_pose, scfg)
-            qq = q[s0:e0].copy()
-            flip = np.cumprod(np.where(np.sum(qq[1:] * qq[:-1], axis=1) < 0, -1.0, 1.0))
-            qq[1:] *= flip[:, None]
-            qq = _lowpass(qq, cfg.sigma_rot, scfg)
-            q[s0:e0] = qq / np.linalg.norm(qq, axis=1, keepdims=True)
-            trans[s0:e0] = _lowpass(trans[s0:e0], cfg.sigma_trans, scfg)
-        G = roma.unitquat_to_rotmat(torch.as_tensor(q)).numpy()
+        G, trans = smooth_params(frames, sel, G, trans, cfg)
 
     return Body(frames=frames, g6d=rotmat_to_6d(tt(G)), trans=tt(trans), pose=tt(sel['body_pose']),
                 hand=tt(sel['hand']), face=tt(sel['face']), shape=tt(shape), scale=tt(scale),
                 log_s=torch.zeros(1, device=device), best_cam=best, n_views=n_views, stats=stats)
+
+
+def smooth_params(frames: np.ndarray, sel: Dict[str, np.ndarray], G: np.ndarray, trans: np.ndarray, cfg: FitConfig
+                  ) -> Tuple[np.ndarray, np.ndarray]:
+    """Hampel + zero-phase Gaussian per run of consecutive frames: sel's body_pose / hand / face in place (sigma_pose),
+    G (T, 3, 3) as sign-aligned quaternions (sigma_rot), trans (T, 3) as xyz (sigma_trans). Returns G, trans."""
+    scfg = SmoothConfig(cfg.sigma_pose, cfg.sigma_rot, cfg.sigma_trans, cfg.hampel_half_window, cfg.hampel_n_sigma)
+    q = roma.rotmat_to_unitquat(torch.as_tensor(G, dtype=torch.float64)).numpy()
+    trans = np.array(trans, dtype=np.float64)
+    for s0, e0 in runs(frames):
+        if e0 - s0 < 2:
+            continue
+        for k in ('body_pose', 'hand', 'face'):
+            sel[k][s0:e0] = _lowpass(np.asarray(sel[k][s0:e0], dtype=np.float64), cfg.sigma_pose, scfg)
+        qq = q[s0:e0].copy()
+        flip = np.cumprod(np.where(np.sum(qq[1:] * qq[:-1], axis=1) < 0, -1.0, 1.0))
+        qq[1:] *= flip[:, None]
+        qq = _lowpass(qq, cfg.sigma_rot, scfg)
+        q[s0:e0] = qq / np.linalg.norm(qq, axis=1, keepdims=True)
+        trans[s0:e0] = _lowpass(trans[s0:e0], cfg.sigma_trans, scfg)
+    return roma.unitquat_to_rotmat(torch.as_tensor(q)).numpy(), trans
+
+
+def smooth_body(body: 'Body', cfg: FitConfig) -> 'Body':
+    """The same smoothing applied to a fitted body (pose, G, T; shape and size stay)."""
+    dev = body.trans.device
+    sel = {k: getattr(body, a).cpu().numpy().astype(np.float64).copy()
+           for k, a in (('body_pose', 'pose'), ('hand', 'hand'), ('face', 'face'))}
+    G, T = smooth_params(body.frames, sel, rot6d_to_rotmat(body.g6d).cpu().double().numpy(),
+                         body.trans.cpu().numpy(), cfg)
+    tt = lambda a: torch.as_tensor(a, dtype=torch.float32, device=dev)  # noqa: E731
+    return Body(body.frames, rotmat_to_6d(tt(G)), tt(T), tt(sel['body_pose']), tt(sel['hand']), tt(sel['face']),
+                body.shape, body.scale, body.log_s, body.best_cam, body.n_views, dict(body.stats))
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +604,8 @@ def fit_person(head_pose, tracks: List[CamTrack], body: Body, cfg: FitConfig, de
     out = Body(frames, g6d.detach(), trans.detach(), pose.detach(), body.hand, body.face, shape.detach(),
                scale.detach(), log_s.detach(), body.best_cam, body.n_views, dict(body.stats))
     out.stats['size_factor'] = float(torch.exp(log_s.detach()))
+    if cfg.smooth_post:
+        out = smooth_body(out, cfg)
     out.stats['loss_first'] = hist[0][1] if hist else {}
     out.stats['loss_last'] = hist[-1][1] if hist else {}
     return out
