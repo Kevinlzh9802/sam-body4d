@@ -505,6 +505,12 @@ def finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces
         with open(os.path.join(cdir, 'stage3_run_options.txt'), 'w') as fh:
             for k, v in opts.items():
                 fh.write(f'{k}: {v}\n')
+    # summary.json before the (slow) videos: later steps (prompts, ID check) only need the fit
+    summary['seconds'] = round(time.time() - t_start, 1)
+    with open(os.path.join(out_dir, 'summary.json'), 'w') as fh:
+        json.dump(summary, fh, indent=1, default=float)
+    for r in runs_:
+        cdir = os.path.join(out_dir, 'cameras', r['seq'])
         if not args.no_video:
             try:
                 render_overlay_video(cdir)

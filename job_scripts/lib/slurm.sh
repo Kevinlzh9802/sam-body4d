@@ -38,6 +38,7 @@ sbatch_flags() {
     stage3)       time=8:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=8:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
     # multi-view pipeline (DAIC only): MHR fit on a GPU; extra cameras' steps (mv_extra_cams.sh)
     stage3_mvfit) time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=24:00:00;   daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    mv_render)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=12:00:00;   daic_cpus=16; daic_mem=32G;  daic_gpu="" ;;
     mv_segments)  time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=8:00:00;    daic_cpus=4;  daic_mem=16G;  daic_gpu="" ;;
     mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=4:00:00;    daic_cpus=8;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     mv_stage1)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1-00:00:00; daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;

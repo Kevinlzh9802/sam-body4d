@@ -29,6 +29,9 @@
 #   -parts <N>             array job of N tasks, task K fits every N-th person from K (stage3_mvfit.py --part K/N);
 #                          one batch only. Then -merge (same other options) collects them, fits the floor, exports.
 #   -merge                 the merge step of -parts (no fitting)
+#   -video                 also render the overlay videos in the fit job (default: no; slow, more than an hour per
+#                          camera for 600 frames on 8 CPUs)
+#   -render                CPU job: only the overlay videos of an existing fit (cameras/<seq>/reproj_overlay.mp4)
 #   -sbatch "<flags>"      extra sbatch flags
 #   -- <args>              passed on to stage3_mvfit.py
 set -euo pipefail
@@ -50,6 +53,8 @@ NUM_FRAMES=""
 LABEL=""
 PARTS=""
 MERGE=0
+VIDEO=0
+RENDER=0
 PY_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +66,8 @@ while [[ $# -gt 0 ]]; do
     -label|--label)           LABEL="${2:-}"; shift 2 ;;
     -parts|--parts)           PARTS="${2:-}"; shift 2 ;;
     -merge|--merge)           MERGE=1; shift ;;
+    -video|--video)           VIDEO=1; shift ;;
+    -render|--render)         RENDER=1; shift ;;
     --)                       shift; PY_ARGS=("$@"); break ;;
     *)                        parse_common_args "$@"; shift "$COMMON_SHIFT" ;;
   esac
@@ -85,8 +92,14 @@ if [ -n "$PARTS" ]; then
   [ ${#BATCH_NUMS[@]} -eq 1 ] || die "-parts needs exactly one batch"
   EXTRA_SBATCH="--array=0-$((PARTS - 1)) $EXTRA_SBATCH"
 fi
-use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
-self_submit stage3_mvfit "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+STAGE=stage3_mvfit
+if [ "$RENDER" = 1 ]; then
+  STAGE=mv_render
+  CONTAINER_GPU=0
+else
+  use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
+fi
+self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  code: $SB4D_CODE  session $SESSION  batches ${BATCH_NUMS[*]}"
 echo "[INFO] Stage 2 -fisheye: $FISHEYE_RAW_DIR   output: $MVFIT_DIR"
@@ -136,6 +149,15 @@ for bn in "${BATCH_NUMS[@]}"; do
   elif [ "$MERGE" = 1 ]; then
     HOLD+=(--merge)
   fi
+  if [ "$RENDER" = 1 ]; then
+    dirs=()
+    for d in "$out"/cameras/*/; do dirs+=("$(host_to_container "${d%/}")"); done
+    [ ${#dirs[@]} -gt 0 ] || { echo "[ERROR] no cameras/ in $out" >&2; failed=$((failed + 1)); continue; }
+    if run_in_container scripts/render_overlay_video.py "${dirs[@]}"; then echo "[INFO] videos done."
+    else echo "[ERROR] videos FAILED." >&2; failed=$((failed + 1)); fi
+    continue
+  fi
+  [ "$VIDEO" = 1 ] || HOLD+=(--no-video)
   if run_in_container stage3_mvfit.py "${inputs[@]}" --out-dir "$(host_to_container "$out")" --config "$CONFIG" \
       ${CLIP[@]+"${CLIP[@]}"} ${HOLD[@]+"${HOLD[@]}"} ${PY_ARGS[@]+"${PY_ARGS[@]}"}; then
     echo "[INFO] batch $bn done."
