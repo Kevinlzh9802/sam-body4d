@@ -18,3 +18,6 @@ imgui.ini
 # multi-view plan/progress notes: symlinks to /tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d/
 plan_multiview.md
 MULTIVIEW_PROGRESS.md
+
+# SLURM logs of the job scripts (lib/cluster.sh LOG_DIR on DAIC)
+logs/

@@ -27,7 +27,7 @@ detect_cluster() {
 
 CLUSTER="${SB4D_CLUSTER:-$(detect_cluster)}"
 
-# Multi-view pipeline output root on DAIC (lib/dataset.sh); also holds the SLURM logs of DAIC users other than zli33.
+# Multi-view pipeline output root on DAIC (lib/dataset.sh).
 MV_ROOT="${SB4D_MV_ROOT:-/tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d}"
 
 case "$CLUSTER" in
@@ -44,9 +44,9 @@ case "$CLUSTER" in
       CODE_HOST=/home/zli33/linuxhome/projects/sam-body4d
       LOG_DIR=/home/zli33/linuxhome/slurm_outputs/sam_4d_body
     else
-      # e.g. edortaperez: checkout in the user's linuxhome, logs under MV_ROOT
+      # e.g. edortaperez: checkout in the user's linuxhome, logs in its gitignored logs/ (set below)
       CODE_HOST=$HOME/linuxhome/sam-body4d
-      LOG_DIR=$MV_ROOT/logs
+      LOG_DIR=""
     fi
     DATA_BASE_HOST=$NEON_HOST/zonghuan/data
     MODEL_HOST=$NEON_HOST/models/sam4d_checkpoints
@@ -66,6 +66,7 @@ esac
 
 DATA_BASE_HOST="${SB4D_DATA_BASE:-$DATA_BASE_HOST}"
 CODE_HOST="${SB4D_CODE_HOST:-$CODE_HOST}"
+LOG_DIR="${LOG_DIR:-$CODE_HOST/logs}"
 
 BIND_CODE=/mnt/sam-body4d
 BIND_MODEL=/mnt/sam4d_checkpoints
