@@ -88,9 +88,11 @@ sbatch_flags() {
   fi
 }
 
-# Seconds -> Slurm time (H:MM:00) with 5% added, rounded up to whole minutes (at least 2 min).
+# Seconds -> Slurm time (H:MM:00): +5% for the rate's spread and +10 min for what varies between runs (unpacking
+# Stage 1 archives over network storage, model loading), rounded up to whole minutes. The fit also checkpoints and
+# requeues itself once if it still runs short (stage3_mvfit.sh).
 mv_time_flag() {
-  local m=$(( ($1 * 105 / 100 + 59) / 60 ))
+  local m=$(( ($1 * 105 / 100 + 600 + 59) / 60 ))
   (( m >= 2 )) || m=2
   printf '%d:%02d:00' $((m / 60)) $((m % 60))
 }

@@ -76,7 +76,7 @@ n_seg=30
 case "$STEP" in
   segments) per=$((30 + n_seg * 21)) ;;
   prompts)  per=$((180 + n_seg * 10)) ;;
-  stage1)   per=$((300 + n_seg * 2400)) ;;
+  stage1)   per=$((300 + n_seg * 3600)) ;;  # 1 h per segment until measured (Stage 1 has no checkpoints)
   idcheck)  per=$((240 + n_seg * 60)) ;;
 esac
 export MV_TIME_S=$(( per * ${#SEQS[@]} ))

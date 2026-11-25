@@ -105,6 +105,9 @@ export MV_TIME_S=$(( MV_TIME_S * ${#BATCH_NUMS[@]} ))
 # 6.2 GB measured with 2 cameras (600 frames); masks and their crops grow with the cameras
 export MV_MEM="$(( (4100 + 1600 * n_cams) * 105 / 100 ))M"
 STAGE=stage3_mvfit
+# No fit is lost to a time-out: 5 min before the limit SLURM sends USR1, the job requeues itself once, and the rerun
+# skips every person already fitted (stage3_mvfit.py checkpoints, parts/<pid>.pt). The log is appended to.
+[ "$RENDER" = 1 ] || EXTRA_SBATCH="--requeue --signal=B:USR1@300 --open-mode=append $EXTRA_SBATCH"
 if [ "$RENDER" = 1 ]; then
   unset MV_TIME_S  # not measured on DAIC yet (lib/slurm.sh default)
   STAGE=mv_render
@@ -117,6 +120,16 @@ self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 echo "[INFO] Cluster: $CLUSTER  code: $SB4D_CODE  session $SESSION  batches ${BATCH_NUMS[*]}"
 echo "[INFO] Stage 2 -fisheye: $FISHEYE_RAW_DIR   output: $MVFIT_DIR"
 failed=0
+on_time_limit() {
+  if [ "${SLURM_RESTART_COUNT:-0}" -lt 1 ]; then
+    echo "[WARN] $(date '+%F %T') time limit in 5 min: requeueing job $SLURM_JOB_ID once (fitted people are kept)"
+    scontrol requeue "$SLURM_JOB_ID"
+  else
+    echo "[ERROR] time limit in 5 min after a requeue already: not requeueing again (resubmit with a longer -sbatch --time)" >&2
+  fi
+}
+[ -z "${SLURM_JOB_ID:-}" ] || trap on_time_limit USR1
+[ "${SLURM_RESTART_COUNT:-0}" = 0 ] || echo "[INFO] restart ${SLURM_RESTART_COUNT} of job $SLURM_JOB_ID: resuming from the checkpoints"
 for bn in "${BATCH_NUMS[@]}"; do
   inputs=()
   holdout=()
@@ -171,8 +184,14 @@ for bn in "${BATCH_NUMS[@]}"; do
     continue
   fi
   [ "$VIDEO" = 1 ] || HOLD+=(--no-video)
-  if run_in_container stage3_mvfit.py "${inputs[@]}" --out-dir "$(host_to_container "$out")" --config "$CONFIG" \
-      ${CLIP[@]+"${CLIP[@]}"} ${HOLD[@]+"${HOLD[@]}"} ${PY_ARGS[@]+"${PY_ARGS[@]}"}; then
+  # in the background, so that bash can run the USR1 trap while it waits
+  run_in_container stage3_mvfit.py "${inputs[@]}" --out-dir "$(host_to_container "$out")" --config "$CONFIG" \
+      ${CLIP[@]+"${CLIP[@]}"} ${HOLD[@]+"${HOLD[@]}"} ${PY_ARGS[@]+"${PY_ARGS[@]}"} &
+  child=$!
+  rc=0
+  wait "$child" || rc=$?
+  while [ "$rc" -gt 128 ] && kill -0 "$child" 2>/dev/null; do rc=0; wait "$child" || rc=$?; done
+  if [ "$rc" = 0 ]; then
     echo "[INFO] batch $bn done."
   else
     echo "[ERROR] batch $bn FAILED." >&2

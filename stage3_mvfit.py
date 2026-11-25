@@ -317,7 +317,7 @@ def main() -> None:
     ap.add_argument('--part', default=None, metavar='K/N',
                     help='fit only every N-th person starting at K (sorted IDs), e.g. one SLURM array task each; the '
                          'start bodies and the start floor still use everyone, so all parts get the same floor. '
-                         'Writes <out-dir>/parts/<pid>.pt and parts/summary_<K>.json; then run once with --merge')
+                         'Then run once with --merge')
     ap.add_argument('--merge', action='store_true', help='no fitting: collect parts/, refit the floor, export')
     ap.add_argument('--min-frames', type=int, default=10, help='shorter person/camera tracks are dropped')
     ap.add_argument('--config', default=os.path.join(REPO_DIR, 'configs', 'body4d.yaml'))
@@ -368,7 +368,7 @@ def main() -> None:
         if not 0 <= k < n:
             raise SystemExit(f'[ERROR] --part {args.part}: need 0 <= K < N')
         part = (k, n)
-        os.makedirs(parts_dir, exist_ok=True)
+    os.makedirs(parts_dir, exist_ok=True)
 
     sync = sync_check(runs_) if not args.merge else {}
     for pair, s in sync.items():
@@ -406,12 +406,23 @@ def main() -> None:
                'frame_range': [args.start, hi], 'config': vars(cfg), 'args': vars(args), 'sync': sync,
                'floor_start': {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in floor0.items()},
                'people': {}}
+    # Checkpoints: every fitted person is saved to parts/<pid>.pt with a key of everything that determines the fit, so
+    # a rerun of the same fit (e.g. requeued after a time-out, job_scripts/stage3_mvfit.sh) skips them; --merge reads
+    # them too. A different config / input / frame range makes new fits.
+    key = checkpoint_key(args, cfg)
+    with open(os.path.join(parts_dir, 'summary_base.json'), 'w') as fh:
+        json.dump(summary, fh, indent=1, default=float)
     fitted = {}
     fit_pids = pids if part is None else pids[part[0]::part[1]]
     if part is not None:
         log(f'[INFO] part {part[0]}/{part[1]}: fitting {len(fit_pids)} of {len(pids)} people: {fit_pids}')
     for pid in fit_pids:
         t0 = time.time()
+        ck = load_checkpoint(parts_dir, pid, key, device)
+        if ck is not None:
+            fitted[pid], summary['people'][str(pid)] = ck
+            log(f'[INFO] person {pid}: fitted before (checkpoint {parts_dir}/{pid}.pt), skipped')
+            continue
         log(f'[INFO] person {pid}: fitting ({len(starts[pid].frames)} frames, '
             f'cameras {[t.cam.name + (" (held out)" if t.holdout else "") for t in tracks[pid]]})')
         m_start = mv_fit.evaluate(head_pose, tracks[pid], starts[pid], device)
@@ -429,14 +440,36 @@ def main() -> None:
                 f"verts in mask {s.get('verts_in_mask', float('nan')):.3f} -> {f.get('verts_in_mask', float('nan')):.3f}")
         log(f"    accel {m_start['_body']['accel_mm_per_frame2']:.2f} -> {m_final['_body']['accel_mm_per_frame2']:.2f} "
             f"mm/frame^2; {time.time() - t0:.0f} s")
-        if part is not None:
-            torch.save(body_state(fitted[pid]), os.path.join(parts_dir, f'{pid}.pt'))
+        save_checkpoint(parts_dir, pid, key, fitted[pid], summary['people'][str(pid)])
     if part is not None:
-        with open(os.path.join(parts_dir, f'summary_{part[0]}.json'), 'w') as fh:
-            json.dump(summary, fh, indent=1, default=float)
         log(f'[INFO] part {part[0]}/{part[1]} done in {time.time() - t_start:.0f} s -> {parts_dir}')
         return
     finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces, t_start)
+
+
+def checkpoint_key(args, cfg) -> str:
+    """Everything that determines a person's fit (not --part / --merge / output options)."""
+    a = {k: getattr(args, k) for k in ('inputs', 'start', 'num_frames', 'extrinsics', 'view_weight', 'holdout', 'exclude',
+                                       'min_frames', 'config')}
+    a['inputs'] = [os.path.abspath(raw_path(p)) for p in args.inputs]
+    return json.dumps({'args': a, 'cfg': vars(cfg)}, sort_keys=True, default=str)
+
+
+def save_checkpoint(parts_dir: str, pid: int, key: str, body: mv_fit.Body, entry: dict) -> None:
+    path = os.path.join(parts_dir, f'{pid}.pt')
+    torch.save({'key': key, 'state': body_state(body), 'summary': entry}, path + '.tmp')
+    os.replace(path + '.tmp', path)
+
+
+def load_checkpoint(parts_dir: str, pid: int, key: Optional[str], device):
+    """(Body, summary entry) of a saved fit, or None; key None accepts any (--merge)."""
+    path = os.path.join(parts_dir, f'{pid}.pt')
+    if not os.path.exists(path):
+        return None
+    d = torch.load(path, weights_only=False)
+    if 'key' not in d or (key is not None and d['key'] != key):
+        return None
+    return body_from_state(d['state'], device), d['summary']
 
 
 def body_state(b: mv_fit.Body) -> dict:
@@ -451,20 +484,20 @@ def body_from_state(d: dict, device) -> mv_fit.Body:
 
 
 def merge_and_export(args, out_dir, parts_dir, pids, tracks, runs_, head_pose, faces, device, t_start) -> None:
-    missing = [p for p in pids if not os.path.exists(os.path.join(parts_dir, f'{p}.pt'))]
+    cfg = FitConfig(**{k: getattr(args, k) for k in vars(FitConfig()) if hasattr(args, k)})
+    if args.no_floor_term:
+        cfg.w_floor = 0.0
+    cfg.smooth_post = not args.no_smooth_post
+    cfg.smooth_start = not args.no_smooth_start
+    key = checkpoint_key(args, cfg)
+    loaded = {p: load_checkpoint(parts_dir, p, key, device) for p in pids}
+    missing = [p for p, v in loaded.items() if v is None]
     if missing:
-        raise SystemExit(f'[ERROR] --merge: no fitted part for people {missing} in {parts_dir}')
-    fitted = {p: body_from_state(torch.load(os.path.join(parts_dir, f'{p}.pt'), weights_only=False), device)
-              for p in pids}
-    summary = None
-    for fn in sorted(os.listdir(parts_dir)):
-        if fn.startswith('summary_') and fn.endswith('.json'):
-            with open(os.path.join(parts_dir, fn)) as fh:
-                part_summary = json.load(fh)
-            if summary is None:
-                summary = part_summary
-            else:
-                summary['people'].update(part_summary['people'])
+        raise SystemExit(f'[ERROR] --merge: no fit with these options for people {missing} in {parts_dir}')
+    with open(os.path.join(parts_dir, 'summary_base.json')) as fh:
+        summary = json.load(fh)
+    fitted = {p: v[0] for p, v in loaded.items()}
+    summary['people'] = {str(p): v[1] for p, v in loaded.items()}
     summary['args'] = dict(summary['args'], merged_parts=True)
     log(f'[INFO] merged {len(fitted)} people from {parts_dir}')
     finish(args, out_dir, summary, fitted, pids, tracks, runs_, head_pose, faces, t_start)
