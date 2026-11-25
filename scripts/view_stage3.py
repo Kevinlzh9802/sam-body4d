@@ -253,8 +253,59 @@ def mesh_sources(mesh_dir: str, ids, vertices_dir: Optional[str]) -> Dict[int, s
     return out
 
 
+# ---------------------------------------------------------------------------
+# Display decimation
+# ---------------------------------------------------------------------------
+
+def cluster_vertices(ref: np.ndarray, faces: np.ndarray, target: int) -> np.ndarray:
+    """Cluster label per vertex (0..C-1), about *target* clusters: vertices in one voxel of the reference pose that
+    are connected through edges inside that voxel (so a hand resting on a hip stays apart from it). Fixed for all
+    frames, so the coarse mesh keeps its faces while the body moves."""
+    lo = ref.min(0)
+
+    def voxels(size: float) -> np.ndarray:
+        return np.unique(np.floor((ref - lo) / size).astype(np.int64), axis=0, return_inverse=True)[1].reshape(-1)
+
+    small, big = 1e-4, float(np.ptp(ref, 0).max()) + 1e-6  # binary search on the voxel side for ~target voxels
+    for _ in range(25):
+        mid = (small * big) ** 0.5
+        if voxels(mid).max() + 1 > target:
+            small = mid
+        else:
+            big = mid
+    vox = voxels(big)
+    # Split each voxel into its connected parts: label propagation over the edges within a voxel
+    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    e = e[vox[e[:, 0]] == vox[e[:, 1]]]
+    lab = np.arange(len(ref))
+    while True:
+        m = np.minimum(lab[e[:, 0]], lab[e[:, 1]])
+        new = lab.copy()
+        np.minimum.at(new, e[:, 0], m)
+        np.minimum.at(new, e[:, 1], m)
+        new = new[new]  # pointer jumping
+        if np.array_equal(new, lab):
+            break
+        lab = new
+    return np.unique(lab, return_inverse=True)[1].reshape(-1)
+
+
+def decimate(verts: np.ndarray, faces: np.ndarray, target: int) -> Tuple[np.ndarray, np.ndarray]:
+    """(T, V, 3) vertices and faces -> (T, C, 3) cluster means and the faces between three different clusters."""
+    lab = cluster_vertices(verts[0], faces, target)
+    order = np.argsort(lab, kind="stable")
+    starts = np.r_[0, np.nonzero(np.diff(lab[order]))[0] + 1]
+    counts = np.diff(np.r_[starts, len(lab)]).astype(np.float32)
+    out = np.add.reduceat(verts[:, order], starts, axis=1) / counts[None, :, None]
+    f = lab[faces]
+    f = f[(f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 2] != f[:, 0])]
+    f = f[np.sort(np.unique(np.sort(f, axis=1), axis=0, return_index=True)[1])]
+    return out.astype(np.float32), f.astype(np.int32)
+
+
 def load_people(mesh_dir: str, frame_range, stride: int, ids, to_rig: Optional[Camera],
-                scale: float, cam_name: str, vertices_dir: Optional[str] = None) -> List[Person]:
+                scale: float, cam_name: str, vertices_dir: Optional[str] = None,
+                target_verts: Optional[int] = None) -> List[Person]:
     people = []
     for pid, path in mesh_sources(mesh_dir, ids, vertices_dir).items():
         with np.load(path) as d:
@@ -270,8 +321,10 @@ def load_people(mesh_dir: str, frame_range, stride: int, ids, to_rig: Optional[C
         v = read_npz_rows(path, "vertices", rows) / scale
         if to_rig is not None:  # x_rig = R^T (x_cam - t)
             v = (v - to_rig.t.astype(np.float32)) @ to_rig.R.astype(np.float32)
-        people.append(Person(f"{cam_name} id {pid}", pid, frames[rows], v.astype(np.float32),
-                             faces.astype(np.int32), to_rig))
+        v, faces = v.astype(np.float32), faces.astype(np.int32)
+        if target_verts:
+            v, faces = decimate(v, faces, target_verts)
+        people.append(Person(f"{cam_name} id {pid}", pid, frames[rows], v, faces, to_rig))
     return people
 
 
@@ -332,6 +385,10 @@ def main() -> None:
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--fps", type=float, default=30.0)
+    ap.add_argument("--verts", type=int, default=2000,
+                    help="vertices per displayed body (the browser gets every body's vertices each frame; "
+                         "full MHR meshes, 18439, stall playback with many people)")
+    ap.add_argument("--full-res", action="store_true", help="show the full meshes (slow with many people)")
     args = ap.parse_args()
 
     import viser
@@ -388,10 +445,13 @@ def main() -> None:
         loaded_mesh_dirs.add(os.path.realpath(mesh_dir))
         label = "mvfit" if opts.get("mode") == "mvfit" else cam_name
         loaded = load_people(mesh_dir, args.frames, args.stride, set(args.ids or []), to_rig, scale, label,
-                             args.vertices_dir)
+                             args.vertices_dir, None if args.full_res else args.verts)
         n_frames = sum(len(p.frames) for p in loaded)
+        per_frame = sum(p.verts.shape[1] for p in loaded) * 12 / 1e6
         print(f"[INFO] {out_dir}: {len(loaded)} people, {n_frames} person-frames "
-              f"({n_frames * 18439 * 12 / 1e9:.1f} GB)", flush=True)
+              f"({sum(p.verts.nbytes for p in loaded) / 1e9:.2f} GB; up to {per_frame:.1f} MB to the browser per frame, "
+              f"{'full meshes' if args.full_res else f'decimated to ~{args.verts} vertices, --full-res for all'})",
+              flush=True)
         people += loaded
     if not people:
         raise SystemExit("[ERROR] No meshes found (check the dirs, --frames and --ids).")
