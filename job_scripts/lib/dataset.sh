@@ -142,6 +142,8 @@ VOH_SIDE_TIMESTAMPS=/tudelft.net/staff-umbrella/neon/experiments/Video-OnlineHMR
 load_mv_dirs() {
   [ "$DATASET" = cosilab ] || die "The multi-view pipeline is for cosilab"
   [ "$CLUSTER" = daic ] || die "The multi-view pipeline runs on DAIC (it reads the cosilab project and $MV_ROOT)"
+  # Its jobs are billed to daic-eemcs-insy-reit (user, 2026-11-25: fair-share on -prb ran low); SB4D_ACCOUNT overrides
+  export SB4D_ACCOUNT="${SB4D_ACCOUNT:-daic-eemcs-insy-reit}"
   FISHEYE_RAW_DIR=$MV_ROOT/mhr_raw_fisheye
   MVFIT_DIR=$MV_ROOT/mvfit
   MV_VIDEO_DIR=$MV_ROOT/video_segs_10s
