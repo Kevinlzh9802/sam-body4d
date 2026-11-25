@@ -36,12 +36,21 @@ sbatch_flags() {
     stage2_part)  time=20:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=20:00:00;   daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_merge) time=0:30:00;  partition=compute;  cpus=2;  mem_per_cpu=16000M; daic_time=0:30:00;    daic_cpus=2;  daic_mem=32G;  daic_gpu="" ;;
     stage3)       time=8:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=8:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
-    # multi-view pipeline (DAIC only): MHR fit on a GPU; extra cameras' steps (mv_extra_cams.sh)
-    stage3_mvfit) time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=24:00:00;   daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    mv_render)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=12:00:00;   daic_cpus=16; daic_mem=32G;  daic_gpu="" ;;
-    mv_segments)  time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=8:00:00;    daic_cpus=4;  daic_mem=16G;  daic_gpu="" ;;
-    mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=4:00:00;    daic_cpus=8;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
-    mv_stage1)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1-00:00:00; daic_cpus=8;  daic_mem=64G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    # Multi-view pipeline (DAIC only). Requests are kept ~5% above measured use, since the scheduler starts small
+    # jobs much sooner; the launchers replace these times with an estimate from the job's size (MV_TIME_S, see
+    # mv_time_flag). Measured on an A40, 2026-11-24 (sacct Elapsed / TotalCPU / MaxRSS):
+    #   stage2 -fisheye  0.60 s per person crop (cam01 600 frames: 6600 crops 66 min; cam03 ~10800 crops 105 min),
+    #                    ~1.4 CPUs, 11.5 GB RAM, 15 GB GPU memory
+    #   stage3_mvfit     2 cams, 600 frames, 20 people, 300 iterations: 46 min fitting (0.23 s per person-frame)
+    #                    + ~34 min loading Stage 1 masks / starts / evaluation; 1 CPU, 6.2 GB RAM
+    #   mv_segments      21 s per 10 s segment (raw GoPro decode + H.264), ~2 CPUs, 1.2 GB
+    #   mv_prompts, mv_stage1 (and the ID check, also mv_prompts): not measured yet, estimates
+    stage2_fisheye) time=""; partition=""; cpus=""; mem_per_cpu="";             daic_time=2:00:00;    daic_cpus=2;  daic_mem=12G;  daic_gpu=nvidia_rtx_pro_6000 ;;
+    stage3_mvfit) time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1:30:00;    daic_cpus=2;  daic_mem=7G;   daic_gpu=nvidia_rtx_pro_6000 ;;
+    mv_render)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1:00:00;    daic_cpus=16; daic_mem=16G;  daic_gpu="" ;;
+    mv_segments)  time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:02:00;    daic_cpus=2;  daic_mem=1300M; daic_gpu="" ;;
+    mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:15:00;    daic_cpus=2;  daic_mem=8G;   daic_gpu=nvidia_rtx_pro_6000 ;;
+    mv_stage1)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:50:00;    daic_cpus=4;  daic_mem=24G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
 
@@ -64,6 +73,9 @@ sbatch_flags() {
     [ "$partition" = compute ] || SBATCH_FLAGS+=(--gpus-per-task=1)
   else
     [ -n "$daic_time" ] || { echo "[ERROR] $stage has no DAIC resources" >&2; exit 2; }
+    # A launcher's size-based estimate (seconds) replaces the stage's default time, +5% and rounded up to minutes
+    [ -z "${MV_TIME_S:-}" ] || daic_time="$(mv_time_flag "$MV_TIME_S")"
+    [ -z "${MV_MEM:-}" ] || daic_mem="$MV_MEM"
     SBATCH_FLAGS+=(
       --account="${SB4D_ACCOUNT:-daic-eemcs-insy-prb}"
       --time="$daic_time"
@@ -74,6 +86,13 @@ sbatch_flags() {
     # SB4D_GPU (e.g. nvidia_a40, nvidia_l40) replaces the GPU type of GPU stages; see use_gpu_image (lib/cluster.sh)
     [ -z "$daic_gpu" ] || SBATCH_FLAGS+=(--gres="gpu:${SB4D_GPU:-$daic_gpu}:1")
   fi
+}
+
+# Seconds -> Slurm time (H:MM:00) with 5% added, rounded up to whole minutes (at least 2 min).
+mv_time_flag() {
+  local m=$(( ($1 * 105 / 100 + 59) / 60 ))
+  (( m >= 2 )) || m=2
+  printf '%d:%02d:00' $((m / 60)) $((m % 60))
 }
 
 # Slurm --time value ([D-]HH:MM:SS, [D-]HH:MM, MM:SS, MM, D-HH) -> seconds

@@ -69,6 +69,17 @@ case "$STEP" in
   *)        die "-step must be segments, prompts, stage1 or idcheck" ;;
 esac
 resolve_seqs "$STAGE1_DIR"
+# Tight requests (lib/slurm.sh), per batch: segments 21 s each (measured); prompts, Stage 1 and the ID check are
+# estimates until their first DAIC run is measured
+n_seg=30
+[ -z "$SEG_SPEC" ] || n_seg=$(count_spec "$SEG_SPEC")
+case "$STEP" in
+  segments) per=$((30 + n_seg * 21)) ;;
+  prompts)  per=$((180 + n_seg * 10)) ;;
+  stage1)   per=$((300 + n_seg * 2400)) ;;
+  idcheck)  per=$((240 + n_seg * 60)) ;;
+esac
+export MV_TIME_S=$(( per * ${#SEQS[@]} ))
 [ "$STAGE" = mv_segments ] || use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
 self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 

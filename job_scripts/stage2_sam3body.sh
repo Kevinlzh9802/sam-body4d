@@ -118,6 +118,13 @@ if [ "$FISHEYE" = 1 ]; then
   RAW_DIR=$FISHEYE_RAW_DIR
 fi
 resolve_seqs "$STAGE1_DIR"
+if [ "$FISHEYE" = 1 ] && [ "$STAGE" = stage2 ]; then
+  # Tight request (lib/slurm.sh): 0.60 s per person crop on an A40, ~18 people per frame, +2 min per sequence
+  STAGE=stage2_fisheye
+  n_frames=$((10#${BATCH_FRAMES:-18000}))
+  [[ "$FRAMES" =~ ^([0-9]+)-([0-9]+)$ ]] && n_frames=$((BASH_REMATCH[2] - BASH_REMATCH[1] + 1))
+  export MV_TIME_S=$(( ${#SEQS[@]} * (n_frames * 18 * 6 / 10 + 120) ))
+fi
 if [ -n "$PART" ] && [ ${#SEQS[@]} -ne 1 ]; then
   die "-part needs exactly one sequence, got ${#SEQS[@]}: ${SEQS[*]}"
 fi

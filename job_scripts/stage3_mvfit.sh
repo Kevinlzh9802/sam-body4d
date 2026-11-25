@@ -92,8 +92,21 @@ if [ -n "$PARTS" ]; then
   [ ${#BATCH_NUMS[@]} -eq 1 ] || die "-parts needs exactly one batch"
   EXTRA_SBATCH="--array=0-$((PARTS - 1)) $EXTRA_SBATCH"
 fi
+# Tight request (lib/slurm.sh): ~34 min loading + 0.23 s per person-frame (2 cameras, 300 iterations), both
+# scaled with the cameras; ~20 people per session; -parts N: a task fits 1/N of them; -merge: loading + export
+n_cams=$(wc -w <<< "$SESSION_CAMS")
+n_frames=${NUM_FRAMES:-18000}
+if [ "$MERGE" = 1 ]; then
+  MV_TIME_S=$(( 2040 * n_cams / 2 + 600 ))
+else
+  MV_TIME_S=$(( (2040 + n_frames * 20 * 23 / 100 / ${PARTS:-1}) * n_cams / 2 ))
+fi
+export MV_TIME_S=$(( MV_TIME_S * ${#BATCH_NUMS[@]} ))
+# 6.2 GB measured with 2 cameras (600 frames); masks and their crops grow with the cameras
+export MV_MEM="$(( (4100 + 1600 * n_cams) * 105 / 100 ))M"
 STAGE=stage3_mvfit
 if [ "$RENDER" = 1 ]; then
+  unset MV_TIME_S  # not measured on DAIC yet (lib/slurm.sh default)
   STAGE=mv_render
   CONTAINER_GPU=0
 else

@@ -89,6 +89,15 @@ expand_batch_spec() {
   [ ${#BATCH_NUMS[@]} -gt 0 ] || die "Empty -b spec"
 }
 
+# Number of items in a 1,3-5 style spec (without touching BATCH_NUMS).
+count_spec() {
+  local saved=("${BATCH_NUMS[@]+"${BATCH_NUMS[@]}"}") n
+  expand_batch_spec "$1"
+  n=${#BATCH_NUMS[@]}
+  BATCH_NUMS=("${saved[@]+"${saved[@]}"}")
+  echo "$n"
+}
+
 # Builds SEQS from -all/-cam -b/positional args. -all scans <scan_dir>.
 resolve_seqs() {
   local scan_dir="$1" d name seq
