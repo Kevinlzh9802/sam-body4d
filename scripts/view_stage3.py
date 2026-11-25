@@ -50,6 +50,8 @@ import numpy as np
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Rig calibrations: the repo's experiments/extrinsics, else the cosilab one (mounted at the same path as on DAIC)
 COSILAB_CALIB_DIR = "/tudelft.net/staff-umbrella/neon/cosilab_project/data_temp/keypoints/extrinsics"
+# Start view saved with the viewer's "Save start camera" button (position, look_at, up, fov), used for every scene
+CAMERA_FILE = os.path.join(REPO_DIR, "configs", "view_stage3_camera.json")
 DEFAULT_CALIB_DIR = next((d for d in (os.path.join(REPO_DIR, "experiments", "extrinsics"), COSILAB_CALIB_DIR)
                           if os.path.isdir(d)), os.path.join(REPO_DIR, "experiments", "extrinsics"))
 
@@ -385,6 +387,8 @@ def main() -> None:
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--fps", type=float, default=30.0)
+    ap.add_argument("--auto-camera", action="store_true",
+                    help=f"start from the computed view of the group, not the saved one ({os.path.relpath(CAMERA_FILE, REPO_DIR)})")
     ap.add_argument("--verts", type=int, default=2000,
                     help="vertices per displayed body (the browser gets every body's vertices each frame; "
                          "full MHR meshes, 18439, stall playback with many people)")
@@ -483,6 +487,13 @@ def main() -> None:
         server.initial_camera.look_at = (cx, cy, 0.8)
         server.initial_camera.position = (cx - 0.5 * span, cy - 1.1 * span - 2, 0.8 * span + 2)
         server.initial_camera.up = (0.0, 0.0, 1.0)
+    if os.path.isfile(CAMERA_FILE) and not args.auto_camera:
+        with open(CAMERA_FILE, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        for name in ("position", "look_at", "up", "fov"):
+            if name in saved:
+                setattr(server.initial_camera, name, tuple(saved[name]) if name != "fov" else float(saved[name]))
+        print(f"[INFO] Start view from {CAMERA_FILE} (--auto-camera to ignore)", flush=True)
 
     for cam in rig or []:
         C = A @ (-cam.R.T @ cam.t) + b
@@ -516,6 +527,21 @@ def main() -> None:
         g_fps = server.gui.add_slider("FPS", min=1, max=60, step=1, initial_value=args.fps)
         g_traj = server.gui.add_checkbox("Show trajectories", initial_value=False)
         g_ids = server.gui.add_checkbox("Show IDs", initial_value=False)
+        g_save_cam = server.gui.add_button("Save start camera")
+
+    @g_save_cam.on_click
+    def _(event) -> None:
+        """This browser tab's current view -> CAMERA_FILE, the start view of every later run (and of new tabs now)."""
+        cam = event.client.camera
+        saved = {"position": cam.position.round(4).tolist(), "look_at": cam.look_at.round(4).tolist(),
+                 "up": cam.up_direction.round(4).tolist(), "fov": round(float(cam.fov), 4),
+                 "saved_from": [os.path.abspath(d) for d in args.out_dirs]}
+        with open(CAMERA_FILE, "w", encoding="utf-8") as fh:
+            json.dump(saved, fh, indent=2)
+        for name in ("position", "look_at", "up", "fov"):
+            setattr(server.initial_camera, name, tuple(saved[name]) if name != "fov" else saved[name])
+        print(f"[INFO] Saved the start view to {CAMERA_FILE}: {saved}", flush=True)
+        event.client.add_notification("Start camera saved", os.path.relpath(CAMERA_FILE, REPO_DIR), auto_close_seconds=4.0)
 
     def show(step: int) -> None:
         f = int(timeline[step])

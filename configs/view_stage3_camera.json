@@ -1,0 +1,21 @@
+{
+  "position": [
+    -1.5417,
+    -3.9236,
+    1.4068
+  ],
+  "look_at": [
+    -0.7641,
+    0.6331,
+    0.8
+  ],
+  "up": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "fov": 1.309,
+  "saved_from": [
+    "/home/era/code/neon-repos/sam-body4d/experiments/s3_300_cam01"
+  ]
+}
