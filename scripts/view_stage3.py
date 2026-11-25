@@ -209,6 +209,7 @@ class Person:
     verts: np.ndarray    # (len(frames), V, 3) float32, in the rig / world frame (m)
     faces: np.ndarray
     cam: Optional[Camera]
+    source: str = ""     # e.g. "cam06" or "mvfit" (a show/hide toggle per source)
 
 
 def expand_mvfit_root(path: str) -> List[str]:
@@ -217,6 +218,25 @@ def expand_mvfit_root(path: str) -> List[str]:
     if os.path.isdir(os.path.join(path, "world")) and cams:
         return [os.path.dirname(p) for p in cams]
     return [path]
+
+
+def mvfit_root_of(path: str) -> Optional[str]:
+    """The stage3_mvfit.py output dir that *path* is (or one of whose cameras/<camXX_batchBB>/ it is), else None."""
+    p = os.path.abspath(path)
+    for cand in (p, os.path.dirname(os.path.dirname(p))):
+        if os.path.isdir(os.path.join(cand, "world")) and glob.glob(os.path.join(cand, "cameras", "*", "extrinsics")):
+            return cand
+    return None
+
+
+def floor_camera(mvfit_root: str, cam_name: str) -> Tuple[Optional[Camera], Optional[str]]:
+    """The camera *cam_name* posed in an mvfit run's floor frame (metres), and that run's extrinsics dir."""
+    paths = sorted(glob.glob(os.path.join(mvfit_root, "cameras", "*", "extrinsics",
+                                          f"extrinsic_{cam_name.replace('cam', 'cam_')}.json")))
+    if not paths:
+        return None, None
+    extr_dir = os.path.dirname(paths[0])
+    return next((c for c in world_cameras(None, extr_dir, 100.0) if c.name == cam_name), None), extr_dir
 
 
 def has_vertices(path: str) -> bool:
@@ -326,7 +346,7 @@ def load_people(mesh_dir: str, frame_range, stride: int, ids, to_rig: Optional[C
         v, faces = v.astype(np.float32), faces.astype(np.int32)
         if target_verts:
             v, faces = decimate(v, faces, target_verts)
-        people.append(Person(f"{cam_name} id {pid}", pid, frames[rows], v, faces, to_rig))
+        people.append(Person(f"{cam_name} id {pid}", pid, frames[rows], v, faces, to_rig, cam_name))
     return people
 
 
@@ -383,6 +403,10 @@ def main() -> None:
     ap.add_argument("--calib", help="rig calibration JSON (default: found in --calib-dir)")
     ap.add_argument("--vertices-dir", help="re-posed vertices of mvfit bodies stored without them "
                     "(default: experiments/mvfit_viewer/<mvfit dir name>/, then <mvfit dir>/viewer/)")
+    ap.add_argument("--floor-from", metavar="MVFIT_DIR",
+                    help="place camera-space outputs in this stage3_mvfit.py run's floor frame (its extrinsics of "
+                         "their camera), so they share coordinates and the saved start view with that run "
+                         "(default: an mvfit dir given among the outputs)")
     ap.add_argument("--no-level", action="store_true", help="keep the rig / world axes")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
@@ -399,6 +423,10 @@ def main() -> None:
     import viser.transforms as vtf
 
     out_dirs = [d for arg in args.out_dirs for d in expand_mvfit_root(arg)]
+    floor_root = mvfit_root_of(args.floor_from) if args.floor_from else \
+        next((r for r in map(mvfit_root_of, args.out_dirs) if r), None)
+    if args.floor_from and floor_root is None:
+        raise SystemExit(f"[ERROR] --floor-from {args.floor_from} is not a stage3_mvfit.py output (world/, cameras/).")
     loaded_mesh_dirs = set()
     people: List[Person] = []
     rig: Optional[List[Camera]] = None
@@ -418,8 +446,18 @@ def main() -> None:
         cam_name = f"cam{cam_num:02d}" if cam_num is not None else os.path.basename(os.path.normpath(out_dir))
         camera_space = opts.get("export_camera_space", "True") == "True" or opts.get("extrinsics_json") in (None, "None")
         to_rig, scale = None, 1.0
-        spaces.add("camera" if camera_space else "world")
-        if camera_space:
+        spaces.add("camera" if camera_space and not floor_root else "world")
+        if camera_space and floor_root:
+            # Into the mvfit run's floor frame (m) with its pose of this camera
+            to_rig, extr_dir = floor_camera(floor_root, cam_name)
+            if to_rig is None:
+                raise SystemExit(f"[ERROR] {floor_root} has no extrinsics for {cam_name} ({out_dir}).")
+            if world_rig is None:
+                path = args.calib or (find_rig_calibration(args.calib_dir, cam_num) if cam_num is not None else None)
+                world_rig = world_cameras(load_rig_calibration(path) if path else None, extr_dir, 100.0)
+            print(f"[INFO] {out_dir}: placed in the floor frame of {floor_root} ({cam_name}'s fitted pose)", flush=True)
+            shown_cams.add(cam_name)
+        elif camera_space:
             path = args.calib or (find_rig_calibration(args.calib_dir, cam_num) if cam_num is not None else None)
             if path:
                 if rig_path not in (None, path):
@@ -528,6 +566,9 @@ def main() -> None:
         g_traj = server.gui.add_checkbox("Show trajectories", initial_value=False)
         g_ids = server.gui.add_checkbox("Show IDs", initial_value=False)
         g_save_cam = server.gui.add_button("Save start camera")
+        sources = list(dict.fromkeys(p.source for p in people))
+        g_src = {src: server.gui.add_checkbox(f"Show {src}", initial_value=True) for src in sources} \
+            if len(sources) > 1 else {}
 
     @g_save_cam.on_click
     def _(event) -> None:
@@ -549,8 +590,9 @@ def main() -> None:
             g_frame.value = f
             for i, p in enumerate(people):
                 r = row_of[i].get(f)
-                meshes[i].visible = r is not None
-                labels[i].visible = r is not None and g_ids.value
+                on = r is not None and (p.source not in g_src or g_src[p.source].value)
+                meshes[i].visible = on
+                labels[i].visible = on and g_ids.value
                 if r is not None:
                     meshes[i].vertices = p.verts[r]
                     if g_ids.value:
@@ -560,11 +602,14 @@ def main() -> None:
     g_step.on_update(lambda _: show(int(g_step.value)))
     g_ids.on_update(lambda _: show(int(g_step.value)))
 
-    @g_traj.on_update
-    def _(_) -> None:
-        for t in trajs:
+    def show_trajs(_=None) -> None:
+        for p, t in zip(people, trajs):
             if t is not None:
-                t.visible = g_traj.value
+                t.visible = g_traj.value and (p.source not in g_src or g_src[p.source].value)
+
+    g_traj.on_update(show_trajs)
+    for g in g_src.values():
+        g.on_update(lambda _: (show(int(g_step.value)), show_trajs()))
 
     show(0)
     print(f"[INFO] {len(people)} people, {len(timeline)} frames "
