@@ -44,7 +44,7 @@ sbatch_flags() {
     #   stage3_mvfit     2 cams, 600 frames, 20 people, 300 iterations: 46 min fitting (0.23 s per person-frame)
     #                    + ~34 min loading Stage 1 masks / starts / evaluation; 1 CPU, 6.2 GB RAM
     #   mv_segments      21 s per 10 s segment (raw GoPro decode + H.264), ~2 CPUs, 1.2 GB
-    #   mv_prompts       19 s for one segment (2026-11-25)
+    #   mv_prompts       19 s for one segment on a GPU, 3.3 GB (2026-11-25); now CPU only
     #   mv_stage1        OOM at 24G (>25 GB) while saving the masks of 1 segment x 18 people: SAM-3 keeps the
     #                    propagated masks in RAM (grows with frames x people); 48G until a full run is measured
     #   ID check (also mv_prompts): not measured yet
@@ -52,7 +52,8 @@ sbatch_flags() {
     stage3_mvfit) time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1:30:00;    daic_cpus=2;  daic_mem=7G;   daic_gpu=nvidia_rtx_pro_6000 ;;
     mv_render)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=1:00:00;    daic_cpus=16; daic_mem=16G;  daic_gpu="" ;;
     mv_segments)  time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:02:00;    daic_cpus=2;  daic_mem=1300M; daic_gpu="" ;;
-    mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:15:00;    daic_cpus=2;  daic_mem=8G;   daic_gpu=nvidia_rtx_pro_6000 ;;
+    # prompts / ID check: MHR posing of a few frames runs fine on the CPU, and CPU jobs start much sooner
+    mv_prompts)   time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:15:00;    daic_cpus=2;  daic_mem=4G;   daic_gpu="" ;;
     mv_stage1)    time=""; partition=""; cpus=""; mem_per_cpu="";               daic_time=0:50:00;    daic_cpus=4;  daic_mem=48G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac

@@ -64,7 +64,7 @@ case "$CAM" in
 esac
 case "$STEP" in
   segments) STAGE=mv_segments; CONTAINER_GPU=0 ;;
-  prompts|idcheck) STAGE=mv_prompts ;;
+  prompts|idcheck) STAGE=mv_prompts; CONTAINER_GPU=0 ;;  # CPU: MHR posing of a few frames
   stage1)   STAGE=mv_stage1 ;;
   *)        die "-step must be segments, prompts, stage1 or idcheck" ;;
 esac
@@ -80,7 +80,7 @@ case "$STEP" in
   idcheck)  per=$((240 + n_seg * 60)) ;;
 esac
 export MV_TIME_S=$(( per * ${#SEQS[@]} ))
-[ "$STAGE" = mv_segments ] || use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
+[ "$STAGE" != mv_stage1 ] || use_gpu_image  # CUDA 12.8 image for the RTX Pro 6000, 11.8 for SB4D_GPU=nvidia_a40/l40
 self_submit "$STAGE" "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  code: $SB4D_CODE  step $STEP  sequences ${SEQS[*]}"
