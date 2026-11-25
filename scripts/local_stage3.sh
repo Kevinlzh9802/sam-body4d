@@ -125,4 +125,4 @@ run scripts/jitter_check.py --raw "$OUT/raw_mhr.pt" --config "$CFG" --device "$D
   ${S3_ARGS[@]+"${S3_ARGS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} | tee "$OUT/jitter/jitter_report.txt"
 fi
 
-[ "$RUN_STAGE3" = 0 ] || echo "[INFO] View the meshes: python scripts/view_stage3.py $OUT/$LABEL  (needs viser)"
+[ "$RUN_STAGE3" = 0 ] || echo "[INFO] View the meshes: uv run --no-sync python scripts/view_stage3.py $OUT/$LABEL  (uv sync --only-group viz once)"

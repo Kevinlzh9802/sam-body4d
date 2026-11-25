@@ -21,3 +21,4 @@ MULTIVIEW_PROGRESS.md
 
 # SLURM logs of the job scripts (lib/cluster.sh LOG_DIR on DAIC)
 logs/
+.venv/

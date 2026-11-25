@@ -36,5 +36,13 @@ dependencies = [
     "MoGe @ git+https://github.com/microsoft/MoGe.git",
 ]
 
+[dependency-groups]
+# Only what scripts/view_stage3.py needs (no torch): uv sync --only-group viz,
+# then uv run --no-sync python scripts/view_stage3.py ...
+viz = [
+    "numpy",
+    "viser~=1.1.1",
+]
+
 [tool.setuptools]
 packages = { find = { where = ["."] , include = ["models", "models.*"] } }

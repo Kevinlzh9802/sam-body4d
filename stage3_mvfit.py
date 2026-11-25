@@ -26,6 +26,8 @@ Output (--out-dir, default <SB4D_OUTPUT_ROOT>/mvfit/session<S>_batch<BB>[_f<star
                              extrinsics/extrinsic_cam_<MM>.json (floor frame, cm, with K and D) for every camera,
                              reproj_overlay.mp4 (scripts/render_overlay_video.py; --no-video to skip)
   summary.json               sync, floor, per person: start/final metrics per camera, loss history, timing
+To view in 3D without torch: bash scripts/local_sif.sh python scripts/export_mvfit_vertices.py <out dir> (re-poses the
+bodies), then uv run --no-sync python scripts/view_stage3.py <out dir>.
 
 Usage (one camera's Stage 2 folder or raw_mhr.pt per argument):
   python stage3_mvfit.py <raw_dir>/cam01_batch01 <raw_dir>/cam03_batch01 ... [--start 6000 --num-frames 600]

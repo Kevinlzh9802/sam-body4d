@@ -12,13 +12,22 @@ is at the median foot height. World-space outputs (Stage 3 with
 --extrinsics-json, the default then) are shown as exported (floor z=0), with
 the cameras from experiments/extrinsics/extrinsic_cam_<MM>.json.
 
-Only numpy and viser are needed (no torch / container). The vertices are read
-straight from the npz stream, so --frames limits memory on full sequences:
-about 0.22 MB per person per shown frame.
+stage3_mvfit.py outputs (the mvfit dir, or one of its cameras/<camXX_batchBB>/)
+show the shared world bodies (world/<pid>.npz, floor z=0) with the cameras of
+cameras/*/extrinsics/. Those bodies hold no vertices unless the fit ran with
+--save-vertices; re-pose them once in the container (MHR needs torch):
+  bash scripts/local_sif.sh python scripts/export_mvfit_vertices.py <mvfit dir> --stride 2
+which writes experiments/mvfit_viewer/<mvfit dir name>/ (found here by default).
+
+Only numpy and viser are needed (no torch / container): the pyproject `viz`
+group (uv sync --only-group viz, once). The vertices are read straight from the
+npz stream, so --frames limits memory on full sequences: about 0.22 MB per
+person per shown frame.
 
 Usage:
-  python scripts/view_stage3.py experiments/stage3_local/cam06_batch01/cam06_seg010/stage3
-  python scripts/view_stage3.py <cam06 out> <cam08 out> --frames 5400 6000 --stride 2
+  uv run --no-sync python scripts/view_stage3.py experiments/stage3_local/cam06_batch01/cam06_seg010/stage3
+  uv run --no-sync python scripts/view_stage3.py <cam06 out> <cam08 out> --frames 5400 6000 --stride 2
+  uv run --no-sync python scripts/view_stage3.py <mvfit dir> --frames 6000 6300
 Open http://localhost:8080. On a cluster node, forward the port first:
   ssh -L 8080:localhost:8080 <login node>   (then run there, or hop on to the node)
 """
@@ -39,6 +48,10 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Rig calibrations: the repo's experiments/extrinsics, else the cosilab one (mounted at the same path as on DAIC)
+COSILAB_CALIB_DIR = "/tudelft.net/staff-umbrella/neon/cosilab_project/data_temp/keypoints/extrinsics"
+DEFAULT_CALIB_DIR = next((d for d in (os.path.join(REPO_DIR, "experiments", "extrinsics"), COSILAB_CALIB_DIR)
+                          if os.path.isdir(d)), os.path.join(REPO_DIR, "experiments", "extrinsics"))
 
 
 # ---------------------------------------------------------------------------
@@ -84,18 +97,32 @@ def _rodrigues(rvec: np.ndarray) -> np.ndarray:
     return np.eye(3) + np.sin(theta) * Kx + (1 - np.cos(theta)) * Kx @ Kx
 
 
-def world_cameras(rig: List[Camera], calib_dir: str, world_scale: float) -> List[Camera]:
-    """The rig's cameras posed in the world frame, from extrinsic_cam_<MM>.json
-    (world_to_camera, as stage3_mvfit.py writes them)."""
+def world_cameras(rig: Optional[List[Camera]], calib_dir: str, world_scale: float) -> List[Camera]:
+    """Cameras posed in the world frame, from extrinsic_cam_<MM>.json (world_to_camera, as stage3_mvfit.py writes
+    them): the rig's cameras, or without a rig every such file in calib_dir. Focal length and image size from the
+    JSON's K and image_size (stage3_mvfit.py writes them), else from the rig."""
+    if rig is None:
+        names = sorted(re.sub(r"^extrinsic_cam_", "cam", os.path.basename(p))[:-5]
+                       for p in glob.glob(os.path.join(calib_dir, "extrinsic_cam_[0-9][0-9].json")))
+        rig_of = {}
+    else:
+        names = [cam.name for cam in rig]
+        rig_of = {cam.name: cam for cam in rig}
     out = []
-    for cam in rig:
-        path = os.path.join(calib_dir, f"extrinsic_{cam.name.replace('cam', 'cam_')}.json")
+    for name in names:
+        path = os.path.join(calib_dir, f"extrinsic_{name.replace('cam', 'cam_')}.json")
         if not os.path.isfile(path):
             continue
         with open(path, "r", encoding="utf-8") as fh:
             d = json.load(fh)
-        out.append(Camera(cam.name, np.asarray(d["rotation"], dtype=np.float64).reshape(3, 3),
-                          np.asarray(d["translation"], dtype=np.float64).reshape(3) / world_scale, cam.f, cam.size))
+        if "K" in d and "image_size" in d:
+            f, size = float(d["K"][0][0]), (int(d["image_size"][0]), int(d["image_size"][1]))
+        elif name in rig_of:
+            f, size = rig_of[name].f, rig_of[name].size
+        else:
+            continue
+        out.append(Camera(name, np.asarray(d["rotation"], dtype=np.float64).reshape(3, 3),
+                          np.asarray(d["translation"], dtype=np.float64).reshape(3) / world_scale, f, size))
     return out
 
 
@@ -182,14 +209,54 @@ class Person:
     cam: Optional[Camera]
 
 
-def load_people(out_dir: str, frame_range, stride: int, ids, to_rig: Optional[Camera],
-                scale: float, cam_name: str) -> List[Person]:
-    people = []
-    for path in sorted(glob.glob(os.path.join(out_dir, "meshes_4d_individual", "*.npz")),
-                       key=lambda p: int(os.path.splitext(os.path.basename(p))[0])):
-        pid = int(os.path.splitext(os.path.basename(path))[0])
+def expand_mvfit_root(path: str) -> List[str]:
+    """A stage3_mvfit.py output dir (world/ + cameras/) -> its per-camera dirs; anything else as given."""
+    cams = sorted(glob.glob(os.path.join(path, "cameras", "*", "stage3_run_options.txt")))
+    if os.path.isdir(os.path.join(path, "world")) and cams:
+        return [os.path.dirname(p) for p in cams]
+    return [path]
+
+
+def has_vertices(path: str) -> bool:
+    with zipfile.ZipFile(path) as zf:
+        return "vertices.npy" in zf.namelist()
+
+
+def default_vertices_dirs(mesh_dir: str) -> List[str]:
+    """Where scripts/export_mvfit_vertices.py puts the re-posed vertices of an mvfit world/ dir."""
+    root = os.path.dirname(os.path.normpath(mesh_dir))
+    return [os.path.join(REPO_DIR, "experiments", "mvfit_viewer", os.path.basename(root)), os.path.join(root, "viewer")]
+
+
+def mesh_sources(mesh_dir: str, ids, vertices_dir: Optional[str]) -> Dict[int, str]:
+    """pid -> npz with vertices: the mesh file itself, or the exported vertices of a body stored without them."""
+    paths = {int(os.path.splitext(os.path.basename(p))[0]): p for p in glob.glob(os.path.join(mesh_dir, "*.npz"))}
+    out, missing = {}, []
+    search = [vertices_dir] if vertices_dir else default_vertices_dirs(mesh_dir)
+    for pid in sorted(paths):
         if ids and pid not in ids:
             continue
+        if has_vertices(paths[pid]):
+            out[pid] = paths[pid]
+            continue
+        found = next((os.path.join(d, f"{pid}.npz") for d in search if os.path.isfile(os.path.join(d, f"{pid}.npz"))),
+                     None)
+        if found is None:
+            missing.append(pid)
+        else:
+            out[pid] = found
+    if missing:
+        root = os.path.dirname(os.path.normpath(mesh_dir))
+        raise SystemExit(f"[ERROR] {mesh_dir}: no vertices for ids {missing} (looked in {', '.join(search)}). "
+                         f"Re-pose them once in the container:\n"
+                         f"  bash scripts/local_sif.sh python scripts/export_mvfit_vertices.py {root} --stride 2")
+    return out
+
+
+def load_people(mesh_dir: str, frame_range, stride: int, ids, to_rig: Optional[Camera],
+                scale: float, cam_name: str, vertices_dir: Optional[str] = None) -> List[Person]:
+    people = []
+    for pid, path in mesh_sources(mesh_dir, ids, vertices_dir).items():
         with np.load(path) as d:
             frames = d["frame_names"].astype(np.int64)
             faces = d["faces"]
@@ -256,9 +323,11 @@ def main() -> None:
     ap.add_argument("--frames", nargs=2, type=int, metavar=("START", "END"), help="frame numbers [START, END)")
     ap.add_argument("--stride", type=int, default=1, help="show every n-th frame")
     ap.add_argument("--ids", type=int, nargs="+", help="only these person IDs")
-    ap.add_argument("--calib-dir", default=os.path.join(REPO_DIR, "experiments", "extrinsics"),
-                    help="where to look for parameters-camera-AA-to-BB.json")
+    ap.add_argument("--calib-dir", default=DEFAULT_CALIB_DIR,
+                    help="where to look for parameters-camera-AA-to-BB.json (default: %(default)s)")
     ap.add_argument("--calib", help="rig calibration JSON (default: found in --calib-dir)")
+    ap.add_argument("--vertices-dir", help="re-posed vertices of mvfit bodies stored without them "
+                    "(default: experiments/mvfit_viewer/<mvfit dir name>/, then <mvfit dir>/viewer/)")
     ap.add_argument("--no-level", action="store_true", help="keep the rig / world axes")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
@@ -268,6 +337,8 @@ def main() -> None:
     import viser
     import viser.transforms as vtf
 
+    out_dirs = [d for arg in args.out_dirs for d in expand_mvfit_root(arg)]
+    loaded_mesh_dirs = set()
     people: List[Person] = []
     rig: Optional[List[Camera]] = None
     rig_path = None
@@ -276,11 +347,11 @@ def main() -> None:
     spaces = set()
     # Only cameras of one session and batch show the same moments
     recordings = {(session_of(camera_number(d, o)), batch_number(d, o))
-                  for d, o in ((d, read_run_options(d)) for d in args.out_dirs)}
+                  for d, o in ((d, read_run_options(d)) for d in out_dirs)}
     if len(recordings) > 1:
         raise SystemExit(f"[ERROR] The outputs are from different recordings (session, batch): {sorted(recordings, key=str)}; "
                          "frame numbers only match within one session (cam06-10 / cam01-05) and batch.")
-    for out_dir in args.out_dirs:
+    for out_dir in out_dirs:
         opts = read_run_options(out_dir)
         cam_num = camera_number(out_dir, opts)
         cam_name = f"cam{cam_num:02d}" if cam_num is not None else os.path.basename(os.path.normpath(out_dir))
@@ -304,10 +375,20 @@ def main() -> None:
             # Multi-view outputs carry the extrinsics of their own (estimated) floor
             own = os.path.join(out_dir, "extrinsics")
             extr_dir = own if os.path.isdir(own) else args.calib_dir
-            if path and world_rig is None:
-                world_rig = world_cameras(load_rig_calibration(path), extr_dir, scale)
+            if world_rig is None:
+                world_rig = world_cameras(load_rig_calibration(path) if path else None, extr_dir, scale)
             shown_cams.add(cam_name)
-        loaded = load_people(out_dir, args.frames, args.stride, set(args.ids or []), to_rig, scale, cam_name)
+        # stage3_mvfit.py: one world body per person, shared by every camera (mesh_dir in the run options)
+        # (prefer the world/ beside cameras/: mesh_dir is absolute on the machine that ran the fit)
+        beside = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(out_dir))), "world")
+        mesh_dir = (beside if opts.get("mode") == "mvfit" and os.path.isdir(beside)
+                    else opts.get("mesh_dir") or os.path.join(out_dir, "meshes_4d_individual"))
+        if os.path.realpath(mesh_dir) in loaded_mesh_dirs:
+            continue
+        loaded_mesh_dirs.add(os.path.realpath(mesh_dir))
+        label = "mvfit" if opts.get("mode") == "mvfit" else cam_name
+        loaded = load_people(mesh_dir, args.frames, args.stride, set(args.ids or []), to_rig, scale, label,
+                             args.vertices_dir)
         n_frames = sum(len(p.frames) for p in loaded)
         print(f"[INFO] {out_dir}: {len(loaded)} people, {n_frames} person-frames "
               f"({n_frames * 18439 * 12 / 1e9:.1f} GB)", flush=True)
@@ -362,7 +443,8 @@ def main() -> None:
         centre = p.verts[:, ::25].mean(1)
         if level or world:
             centre[:, 2] = 0.02  # on the floor
-        gaps = np.diff(p.frames) > args.stride  # no line across frames the person is missing
+        steps = np.diff(p.frames)  # no line across frames the person is missing (exports can have their own stride)
+        gaps = steps > max(args.stride, int(steps.min()) if len(steps) else 1)
         seg = np.stack([centre[:-1], centre[1:]], 1)[~gaps]
         trajs.append(server.scene.add_line_segments(
             f"/trajectories/{i}", seg, colors=color, thickness=0.02, visible=False) if len(seg) else None)
