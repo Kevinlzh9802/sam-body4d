@@ -544,11 +544,12 @@ def main() -> None:
         server.scene.add_label(f"/cameras/{cam.name}/label", cam.name, position=(0.0, 0.0, 0.0))
 
     meshes, labels, trajs = [], [], []
+    one_source = len({p.source for p in people}) == 1
     for i, p in enumerate(people):
         color = person_color(p.pid)
         meshes.append(server.scene.add_mesh_simple(f"/people/{i}", p.verts[0], p.faces, color=color))
-        labels.append(server.scene.add_label(f"/labels/{i}", p.label, position=tuple(p.verts[0].mean(0)),
-                                             visible=False))
+        labels.append(server.scene.add_label(f"/labels/{i}", f"id {p.pid}" if one_source else p.label,
+                                             position=tuple(p.verts[0].mean(0)), visible=False))
         centre = p.verts[:, ::25].mean(1)
         if level or world:
             centre[:, 2] = 0.02  # on the floor
