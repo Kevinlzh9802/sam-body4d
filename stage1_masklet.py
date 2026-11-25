@@ -32,6 +32,7 @@ import gc
 import glob
 import json
 import os
+import re
 import time
 from typing import Dict, List, Tuple, Any
 
@@ -456,6 +457,14 @@ def main():
     for seg_idx, seg_path in enumerate(segment_paths):
         segment_key = _segment_key_from_path(seg_path)
         _, seg_total_frames, seg_w, seg_h = read_video_metadata(seg_path)
+        # Frame numbers follow the segment number (segNNN starts at (NNN - 1) x segment length), so a folder that has
+        # only some segments (e.g. the multi-view pipeline's extra cameras, dataset/make_raw_segments.py) keeps the
+        # batch's frame numbers. With every segment present this changes nothing.
+        m_seg = re.search(r"_seg(\d+)$", segment_key)
+        if m_seg and (int(m_seg.group(1)) - 1) * seg_total_frames > cumulative_frame_offset:
+            print(f"[INFO]   {segment_key}: frame numbers start at {(int(m_seg.group(1)) - 1) * seg_total_frames} "
+                  f"(earlier segments missing)")
+            cumulative_frame_offset = (int(m_seg.group(1)) - 1) * seg_total_frames
         print(f"\n{'='*60}")
         print(f"[INFO] Segment {seg_idx}: {os.path.basename(seg_path)}")
         print(f"[INFO]   frames: {seg_total_frames}, cumulative offset: {cumulative_frame_offset}")
