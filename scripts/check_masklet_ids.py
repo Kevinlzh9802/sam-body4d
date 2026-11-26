@@ -53,7 +53,9 @@ def main() -> None:
     ap.add_argument('--extrinsics', nargs='*', default=[], help='cam12=<rvec/tvec json>')
     ap.add_argument('--step', type=int, default=10, help='every n-th frame of a segment is compared')
     ap.add_argument('--min-iou', type=float, default=0.2)
-    ap.add_argument('--accept-iou', type=float, default=0.4)
+    ap.add_argument('--accept-iou', type=float, default=0.5,
+                    help='VOH clip: cams 13/15/02 0.68-0.76, cam04 0.52; cams 12/14 (stored extrinsics 80-340 px off) 0.45/0.48, '
+                         'and adding them made every other camera worse')
     ap.add_argument('--image-scale', type=float, default=0.5)
     ap.add_argument('--config', default=os.path.join(REPO_DIR, 'configs', 'body4d.yaml'))
     ap.add_argument('--dry-run', action='store_true', help='write id_check.json only')
