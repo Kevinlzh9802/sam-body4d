@@ -26,6 +26,7 @@ cd "$REPO"
 exec apptainer exec ${NV[@]+"${NV[@]}"} --pwd /mnt/sam-body4d --bind "$REPO:/mnt/sam-body4d" \
   --bind "$CKPT:/mnt/sam4d_checkpoints:ro" ${MV_BIND[@]+"${MV_BIND[@]}"} \
   --bind "$NEON/cosilab_project:$NEON/cosilab_project:ro" \
+  --bind "/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload:/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload:ro" \
   --bind "$NEON/experiments/Video-OnlineHMR/cosilab_side_timestamps:$NEON/experiments/Video-OnlineHMR/cosilab_side_timestamps:ro" \
   --env TMPDIR=/mnt/sam-body4d/experiments/tmp --env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/.singularity.d/libs \
   --env PYTHONPATH=/mnt/sam-body4d/models/sam3:/mnt/sam-body4d --env PYOPENGL_PLATFORM=osmesa \

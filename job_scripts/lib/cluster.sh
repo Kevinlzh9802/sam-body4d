@@ -54,6 +54,8 @@ case "$CLUSTER" in
     # torch cu128 build (apptainer/build.sh cu128) for Blackwell GPUs (RTX Pro 6000)
     SIF_PATH_CU128=$NEON_HOST/apptainer/body4d_osmesa_cu128.sif
     COSILAB_PROJECT_HOST="${SB4D_COSILAB_PROJECT:-$NEON_HOST/cosilab_project}"
+    # the 4TU upload (Stage 1 of the annotated cameras, calibration, timestamps) left cosilab_project on 2026-11-25
+    COSILAB_4TU_HOST="${SB4D_COSILAB_4TU:-/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload}"
     # /home/zli33 is ~5 MB (config files only), so the container gets a job-local
     # home on the node's /tmp for matplotlib/torch/CUDA caches (removed at exit).
     CONTAINER_HOME_HOST="${TMPDIR:-/tmp/$USER}/sb4d_home_${SLURM_JOB_ID:-$$}"

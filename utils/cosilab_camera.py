@@ -31,7 +31,10 @@ import torch
 from utils import fisheye
 
 PROJECT_ROOT = os.environ.get('SB4D_COSILAB_PROJECT', '/tudelft.net/staff-umbrella/neon/cosilab_project')
-DATA_ROOT = os.path.join(PROJECT_ROOT, '4TU_upload', 'processed')
+# The 4TU upload moved out of cosilab_project on 2026-11-25 (and raw_sensor_data became raw_data)
+UPLOAD_ROOT = os.environ.get('SB4D_COSILAB_4TU', '/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload')
+DATA_ROOT = os.path.join(UPLOAD_ROOT, 'processed')
+OLD_UPLOAD_ROOTS = (os.path.join(PROJECT_ROOT, '4TU_upload'), '/mnt/cosilab_4tu')
 SIDE_TIMESTAMP_ROOT = os.environ.get(
     'SB4D_SIDE_TIMESTAMPS', '/tudelft.net/staff-umbrella/neon/experiments/Video-OnlineHMR/cosilab_side_timestamps')
 # The only place on /tudelft.net sam-body4d writes to (the neon umbrella is full)
@@ -159,6 +162,14 @@ def parse_overrides(items) -> Dict[int, str]:
 # Raw GoPro footage per session frame (cameras without a session video: 02, 04, 07, 09, side cams)
 # ---------------------------------------------------------------------------
 
+def current_path(path: str) -> str:
+    """A path recorded before the 4TU upload moved (e.g. a Stage 2 meta input_dir), mapped to its current place."""
+    for old in OLD_UPLOAD_ROOTS:
+        if path == old or path.startswith(old + os.sep):
+            return UPLOAD_ROOT + path[len(old):]
+    return path
+
+
 def ffmpeg_exe() -> str:
     """ffmpeg on the PATH, else the one bundled with imageio-ffmpeg (the apptainer image has only that one)."""
     exe = shutil.which('ffmpeg')
@@ -187,9 +198,9 @@ def raw_video_dir(cam: int) -> str:
     """Folder of the raw GoPro files GH0*.MP4 of a camera (raw/ is next to processed/; side cams not in the 4TU upload)."""
     session = cam_session(cam)
     if cam in SIDE_CAMS:
-        return os.path.join(PROJECT_ROOT, 'raw_sensor_data', 'gopro_data',
+        return os.path.join(PROJECT_ROOT, 'raw_data', 'gopro_data',
                             f'side_view_camera-mingle_session_{session}', f'camera_{cam:02d}-mingle_session_{session}')
-    return os.path.join(PROJECT_ROOT, '4TU_upload', 'raw', 'video',
+    return os.path.join(UPLOAD_ROOT, 'raw', 'video',
                         f'top_view_camera-mingle_session_{session}', f'camera_{cam:02d}-mingle_session_{session}')
 
 

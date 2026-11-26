@@ -80,7 +80,8 @@ def raw_path(p: str) -> str:
 
 
 def stage1_dir_for(meta: dict, seq: str, stage1_root: Optional[str]) -> str:
-    cands = ([os.path.join(stage1_root, seq)] if stage1_root else []) + [meta.get('input_dir', '')]
+    recorded = meta.get('input_dir', '')
+    cands = ([os.path.join(stage1_root, seq)] if stage1_root else []) + [recorded, cc.current_path(recorded)]
     for c in cands:
         if c and (os.path.isdir(os.path.join(c, 'masks')) or os.path.isfile(os.path.join(c, 'masks.zip'))):
             return c
