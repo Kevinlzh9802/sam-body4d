@@ -18,7 +18,8 @@
 # and intrinsics/, extrinsics/ to the dataset root (CAMERA_DIR).
 # cosilab on DAIC reads Stage 1 output from the 4TU upload (mounted read-only,
 # never written to) and writes Stage 2/3 to data_temp:
-#   STAGE1_DIR  $COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
+#   STAGE1_DIR  $COSILAB_4TU_HOST/processed/keypoints/sam3_output
+#               (/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload/...)
 #   RAW_DIR     $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
 #   SMOOTH_DIR  /tudelft.net/staff-umbrella/DEEF/COSILab/keypoints (for now;
 #               was $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed;
@@ -56,12 +57,12 @@ load_dataset() {
   # Extra host:container[:ro] mounts for run_in_container
   EXTRA_BINDS=()
   if [ "$CLUSTER" = daic ] && [ "$DATASET" = cosilab ]; then
-    STAGE1_DIR=$COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
+    STAGE1_DIR=$COSILAB_4TU_HOST/processed/keypoints/sam3_output
     RAW_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
     SMOOTH_DIR="${SB4D_STAGE3_OUT:-/tudelft.net/staff-umbrella/DEEF/COSILab/keypoints}"
     CAMERA_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints
     EXTRA_BINDS=(
-      "$COSILAB_PROJECT_HOST/4TU_upload:/mnt/cosilab_4tu:ro"
+      "$COSILAB_4TU_HOST:/mnt/cosilab_4tu:ro"
       "$COSILAB_PROJECT_HOST/data_temp:/mnt/cosilab_temp"
     )
     # Stage 3 output outside data_temp gets its own mount

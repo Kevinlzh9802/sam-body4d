@@ -4,7 +4,8 @@
 # DelftBlue is detected by the presence of /scratch/zli33; anything else is DAIC.
 # Override with SB4D_CLUSTER=delftblue|daic, and the dataset base dir with
 # SB4D_DATA_BASE (e.g. for dry runs against a local copy). On DAIC, cosilab
-# Stage 2/3 folders live under SB4D_COSILAB_PROJECT (see lib/dataset.sh).
+# Stage 2 folders live under SB4D_COSILAB_PROJECT and Stage 1 output under
+# SB4D_COSILAB_4TU (see lib/dataset.sh).
 #
 # Jobs always run the single checkout at CODE_HOST (no code snapshots); the
 # launchers refuse to start from any other copy. SB4D_CODE_HOST overrides it
@@ -44,6 +45,8 @@ case "$CLUSTER" in
     SIF_PATH_CU128=$NEON_HOST/apptainer/body4d_osmesa_cu128.sif
     LOG_DIR=/home/zli33/linuxhome/slurm_outputs/sam_4d_body
     COSILAB_PROJECT_HOST="${SB4D_COSILAB_PROJECT:-$NEON_HOST/cosilab_project}"
+    # cosilab Stage 1 output (read-only); moved out of $COSILAB_PROJECT_HOST
+    COSILAB_4TU_HOST="${SB4D_COSILAB_4TU:-/tudelft.net/staff-umbrella/CosiLabExternal/4TU_upload}"
     # /home/zli33 is ~5 MB (config files only), so the container gets a job-local
     # home on the node's /tmp for matplotlib/torch/CUDA caches (removed at exit).
     CONTAINER_HOME_HOST="${TMPDIR:-/tmp/$USER}/sb4d_home_${SLURM_JOB_ID:-$$}"
