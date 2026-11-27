@@ -18,7 +18,8 @@
 # where the Stage 1 folder is only read.
 #
 # Run with bash on a login node (DelftBlue or DAIC, auto-detected); the script
-# submits itself to SLURM (CPU job), running the code checkout at CODE_HOST (lib/cluster.sh).
+# submits itself to SLURM, one CPU job (4 h) per sequence (-all cam06 -> 7 jobs),
+# running the code checkout at CODE_HOST (lib/cluster.sh).
 #
 # Usage:
 #   bash job_scripts/stage3_mhr.sh cam06_batch01
@@ -55,7 +56,6 @@ if [ ! -f "$SB4D_CODE/job_scripts/lib/common.sh" ]; then
 fi
 source "$SB4D_CODE/job_scripts/lib/common.sh"
 
-ORIG_ARGS=("$@")
 STAGE3_ARGS=()
 LABEL=""
 SUFFIX=""
@@ -63,7 +63,9 @@ BASE=stage3_height
 NO_GROUND=0
 NO_VERTICES=0
 
+PASS_ARGS=()  # the options without the sequence selection, for one job per sequence
 while [[ $# -gt 0 ]]; do
+  words=("$@")
   case "$1" in
     -sigma|--sigma)     [ $# -ge 2 ] || die "$1 needs a value"
                         STAGE3_ARGS+=(--smooth-sigma "$2"); SUFFIX+="_s$2"; shift 2 ;;
@@ -82,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       shift "$COMMON_SHIFT"
       ;;
   esac
+  case "${words[0]}" in
+    -all|--all|-cam|--cam|-b|--b|--batch|[!-]*) ;;  # sequence selection
+    *) PASS_ARGS+=("${words[@]:0:$((${#words[@]} - $#))}") ;;
+  esac
 done
 [ "$BASE" != stage3_camera ] || [ "$NO_VERTICES" = 0 ] || \
   die "-no-vertices does not go with -camera: the multi-view step needs the vertices (stage3_multiview.sh -no-vertices removes them afterwards)"
@@ -95,7 +101,7 @@ CONTAINER_GPU=0
 load_dataset "$DATASET_ARG"
 resolve_seqs "$RAW_DIR"
 mkdir -p "$SMOOTH_DIR"  # a bind mount (lib/dataset.sh) needs it to exist
-self_submit stage3 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+self_submit_per_seq stage3 "$LAUNCHER" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
 echo "[INFO] Sequences: ${SEQS[*]}"

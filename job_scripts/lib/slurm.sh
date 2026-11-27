@@ -22,7 +22,8 @@
 # (~4 GB, x2 while exporting). Check `seff <jobid>` and adjust.
 # Time limits: one Stage 1 job and one Stage 2 part (6000 frames) finish within
 # 20 h; Stage 3 on CPU took ~70 s for 3000 person-frames locally, ~1-2 h
-# extrapolated to a full cosilab batch (~200k person-frames), so 8 h leaves room.
+# extrapolated to a full cosilab batch (~200k person-frames); stage3_mhr.sh submits
+# one job per sequence (self_submit_per_seq) with 4 h each.
 # stage3_multiview runs Stage 3 (camera space) for up to 5 cameras one after the
 # other, then the multi-view step (reads/writes every mesh once): 24 h.
 # Partition "all" (the department partition ewi-insy is not open to this user).
@@ -35,7 +36,7 @@ sbatch_flags() {
     stage2)       time=28:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=3-00:00:00; daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_part)  time=20:00:00; partition=gpu-a100; cpus=16; mem_per_cpu=8000M;  daic_time=20:00:00;   daic_cpus=4;  daic_mem=32G;  daic_gpu=nvidia_rtx_pro_6000 ;;
     stage2_merge) time=0:30:00;  partition=compute;  cpus=2;  mem_per_cpu=16000M; daic_time=0:30:00;    daic_cpus=2;  daic_mem=32G;  daic_gpu="" ;;
-    stage3)       time=8:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=8:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
+    stage3)       time=4:00:00;  partition=compute;  cpus=16; mem_per_cpu=4000M;  daic_time=4:00:00;    daic_cpus=16; daic_mem=64G;  daic_gpu="" ;;
     stage3_multiview) time=24:00:00; partition=compute; cpus=16; mem_per_cpu=4000M; daic_time=24:00:00; daic_cpus=16; daic_mem=64G; daic_gpu="" ;;
     *) echo "[ERROR] Unknown stage: $stage" >&2; exit 2 ;;
   esac
@@ -155,5 +156,24 @@ self_submit() {
   mkdir -p "$LOG_DIR"
   echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  Sequences: ${SEQS[*]}"
   "${cmd[@]}"
+  exit 0
+}
+
+# Like self_submit, but one job per sequence in $SEQS: <script> <args...> <seq>,
+# named sb4d_<stage>_<seq>. <args> must not select sequences (-all/-cam/-b/<seq>).
+# With a single sequence (or inside a job) it is self_submit.
+self_submit_per_seq() {
+  local stage="$1" script="$2" seq
+  shift 2
+  if [ -n "${SLURM_JOB_ID:-}" ] || [ ${#SEQS[@]} -le 1 ]; then
+    self_submit "$stage" "$script" "$@" ${SEQS[@]+"${SEQS[@]}"}
+    return 0
+  fi
+  echo "[INFO] ${#SEQS[@]} sequences -> ${#SEQS[@]} jobs"
+  for seq in "${SEQS[@]}"; do
+    # Subshell: self_submit exits after submitting; a failure (die) stops the loop
+    ( SEQS=("$seq"); EXTRA_SBATCH="--job-name=sb4d_${stage}_$seq $EXTRA_SBATCH"
+      self_submit "$stage" "$script" "$@" "$seq" )
+  done
   exit 0
 }
