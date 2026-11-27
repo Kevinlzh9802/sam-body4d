@@ -130,8 +130,9 @@ resolve_seqs() {
 
 # Sets BINDS to the container mounts (host:container[:ro]).
 container_binds() {
-  BINDS=(
-    "$DATA_ROOT:$BIND_DATA"
+  BINDS=()
+  [ "${DATA_ROOT_BIND:-1}" = 0 ] || BINDS+=("$DATA_ROOT:$BIND_DATA")
+  BINDS+=(
     "$MODEL_HOST:$BIND_MODEL"
     "$CODE_HOST:$BIND_CODE"
     ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}

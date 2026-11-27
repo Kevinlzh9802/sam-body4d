@@ -54,13 +54,18 @@ load_dataset() {
   RAW_DIR=$BBOX_DIR
   SMOOTH_DIR=$BBOX_DIR
   CAMERA_DIR=$DATA_ROOT
-  # Extra host:container[:ro] mounts for run_in_container
+  # Extra host:container[:ro] mounts for run_in_container; DATA_ROOT_BIND=0 leaves
+  # out the $DATA_ROOT mount
   EXTRA_BINDS=()
+  DATA_ROOT_BIND=1
   if [ "$CLUSTER" = daic ] && [ "$DATASET" = cosilab ]; then
     STAGE1_DIR=$COSILAB_4TU_HOST/processed/keypoints/sam3_output
     RAW_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
     SMOOTH_DIR="${SB4D_STAGE3_OUT:-/tudelft.net/staff-umbrella/DEEF/COSILab/keypoints}"
     CAMERA_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints
+    # Every folder Stage 2/3 use is mounted below; $DATA_ROOT
+    # (neon/zonghuan/data/cosilab: videos, annotations for Stage 1, not run on DAIC) is gone
+    DATA_ROOT_BIND=0
     EXTRA_BINDS=(
       "$COSILAB_4TU_HOST:/mnt/cosilab_4tu:ro"
       "$COSILAB_PROJECT_HOST/data_temp:/mnt/cosilab_temp"
