@@ -39,6 +39,13 @@ SIDE_TIMESTAMP_ROOT = os.environ.get(
     'SB4D_SIDE_TIMESTAMPS', '/tudelft.net/staff-umbrella/neon/experiments/Video-OnlineHMR/cosilab_side_timestamps')
 # The only place on /tudelft.net sam-body4d writes to (the neon umbrella is full)
 OUTPUT_ROOT = os.environ.get('SB4D_OUTPUT_ROOT', '/tudelft.net/staff-umbrella/CaptureLab/neon/sam-body4d')
+# Extrinsics: the joint dense-frame calibration of 2026-11-26 (COSILab side_calib_work, copied to
+# OUTPUT_ROOT/calibration/joint_2026-11-26: session2 = s2joint, session1 = s1joint_freetop) replaces the stored 4TU /
+# side extrinsics of the cameras it refit (held-out board errors ~2-6 px instead of up to 46 px; cam04's 4TU pose
+# rested on one board and cams 12/14 were chained through it). Cameras it did not refit (the world cameras 01 / 06)
+# keep the stored ones. SB4D_EXTRINSICS=stored uses the stored ones everywhere.
+EXTRINSICS = os.environ.get('SB4D_EXTRINSICS', 'joint_2026-11-26')
+EXTRINSICS_ROOT = os.path.join(OUTPUT_ROOT, 'calibration')
 
 FPS = 60000 / 1001
 BATCH_FRAMES = 18000  # each batch is 5 min of the session video
@@ -127,7 +134,15 @@ def extrinsics_path(cam: int) -> str:
     session = cam_session(cam)
     sep = '-' if session == 1 else '_'  # the session 1 folders use 'camera-XX', the session 2 folders 'camera_XX'
     view = 'side' if cam in SIDE_CAMS else 'top'
-    return os.path.join(calib_root(cam), f'mingling_{session}_{view}', f'camera{sep}{cam:02d}', 'extrinsic.json')
+    sub = os.path.join(f'camera{sep}{cam:02d}', 'extrinsic.json')
+    if EXTRINSICS != 'stored':
+        root = os.path.join(EXTRINSICS_ROOT, EXTRINSICS, f'session{session}')
+        # session 1's camera-10 (top) was written under mingling_1_side: look in both
+        for v in (view, 'side' if view == 'top' else 'top'):
+            path = os.path.join(root, f'mingling_{session}_{v}', sub)
+            if os.path.exists(path):
+                return path
+    return os.path.join(calib_root(cam), f'mingling_{session}_{view}', sub)
 
 
 def load_camera(cam: int, extrinsics_file: Optional[str] = None) -> Camera:
