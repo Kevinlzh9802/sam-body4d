@@ -137,14 +137,24 @@ resolve_seqs() {
   [ ${#SEQS[@]} -gt 0 ] || die "No sequences given (see -h)"
 }
 
-# Sets BINDS to the container mounts (host:container[:ro]).
+# Sets BINDS to the container mounts (host:container[:ro]). A mount whose host folder doesn't exist is left out
+# with a warning (apptainer would refuse to start): e.g. the dataset folder of another user that the multi-view
+# pipeline doesn't read (neon/zonghuan/data/cosilab disappeared on 2026-11-27 and failed a fit in 8 s).
 container_binds() {
-  BINDS=(
+  local b all=(
     "$DATA_ROOT:$BIND_DATA"
     "$MODEL_HOST:$BIND_MODEL"
     "$CODE_HOST:$BIND_CODE"
     ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}
   )
+  BINDS=()
+  for b in "${all[@]}"; do
+    if [ -e "${b%%:*}" ] || [ "${SB4D_DRY_RUN:-0}" = 1 ]; then
+      BINDS+=("$b")
+    else
+      echo "[WARN] mount source ${b%%:*} does not exist; not mounted" >&2
+    fi
+  done
 }
 
 # Maps a host path to its path inside the container (unchanged if not mounted).
