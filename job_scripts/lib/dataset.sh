@@ -20,7 +20,9 @@
 # never written to) and writes Stage 2/3 to data_temp:
 #   STAGE1_DIR  $COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
 #   RAW_DIR     $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
-#   SMOOTH_DIR  $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed
+#   SMOOTH_DIR  /tudelft.net/staff-umbrella/DEEF/COSILab/keypoints (for now;
+#               was $COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed;
+#               SB4D_STAGE3_OUT overrides it)
 #   CAMERA_DIR  $COSILAB_PROJECT_HOST/data_temp/keypoints
 
 load_dataset() {
@@ -56,12 +58,17 @@ load_dataset() {
   if [ "$CLUSTER" = daic ] && [ "$DATASET" = cosilab ]; then
     STAGE1_DIR=$COSILAB_PROJECT_HOST/4TU_upload/processed/keypoints/sam3_output
     RAW_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_raw
-    SMOOTH_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints/mhr_smoothed
+    SMOOTH_DIR="${SB4D_STAGE3_OUT:-/tudelft.net/staff-umbrella/DEEF/COSILab/keypoints}"
     CAMERA_DIR=$COSILAB_PROJECT_HOST/data_temp/keypoints
     EXTRA_BINDS=(
       "$COSILAB_PROJECT_HOST/4TU_upload:/mnt/cosilab_4tu:ro"
       "$COSILAB_PROJECT_HOST/data_temp:/mnt/cosilab_temp"
     )
+    # Stage 3 output outside data_temp gets its own mount
+    case "$SMOOTH_DIR" in
+      "$COSILAB_PROJECT_HOST/data_temp"|"$COSILAB_PROJECT_HOST/data_temp"/*) ;;
+      *) EXTRA_BINDS+=("$SMOOTH_DIR:/mnt/cosilab_stage3") ;;
+    esac
   fi
 }
 

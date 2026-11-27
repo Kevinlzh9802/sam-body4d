@@ -17,7 +17,11 @@ whole frames x people grid):
                 ``keypoints`` (T_p, 70, 3) float32, ``faces``, ``frame_names``),
                 in world coordinates (world units, cm by default) with extrinsics,
                 else camera space (m); ``cam_t`` (T_p, 3) is the camera-space
-                translation (m) of the person's local mesh
+                translation (m) of the person's local mesh. --no-vertices: once
+                the plots and the video are made, ``vertices`` and ``faces`` are
+                removed again (they are the GBs; the rest is a few MB). Such an
+                output cannot be the input of stage3_multiview.py or
+                scripts/view_stage3.py.
 
 Steps 1, 3 and 4 can be switched off (--no-smooth, --no-mask-reproj, --no-ground)
 to compare. Plots: diagnostics/ (raw pred_cam_t), reproj_overlay/ (final meshes
@@ -49,7 +53,7 @@ from smoothing.feet_z_plot import plot_body_landmarks_z, plot_feet_z_from_stage3
 from smoothing.ground_plane_opt import GroundOptConfig, load_extrinsics_json, optimize_ground_ray_scale
 from smoothing.mask_reproj_opt import MaskReprojOptConfig, load_masks_for_sequence, optimize_mask_reprojection
 from smoothing.reproj_overlay_plot import plot_reproj_overlays_from_stage3
-from smoothing.stage3_core import stack_frames_to_tensors
+from smoothing.stage3_core import drop_mesh_vertices, stack_frames_to_tensors
 from smoothing.temporal import SmoothConfig, person_runs, smooth_mhr_params
 from utils.camera_utils import adjust_K, read_camera_intrinsics_new
 from utils.extract_mesh_ground_info import run_extract_ground_info
@@ -134,6 +138,8 @@ def main() -> None:
     ap.add_argument("--overlay-interval", type=int, default=OVERLAY_INTERVAL,
                     help="Frames between reprojection overlays (reproj_overlay/); 0 = none")
     ap.add_argument("--no-video", action="store_true", help="No reprojection overlay video (reproj_overlay.mp4)")
+    ap.add_argument("--no-vertices", action="store_true",
+                    help="Keep only keypoints / cam_t / frame_names in the npz (vertices dropped after the video)")
     # 1. smoothing
     ap.add_argument("--no-smooth", action="store_true")
     ap.add_argument("--smooth-sigma-pose", type=float, default=SmoothConfig.sigma_pose,
@@ -370,6 +376,9 @@ def main() -> None:
             render_overlay_video(out_dir, stage1_dir=stage1_dir)
         except Exception as e:
             print(f"[WARN] Overlay video failed: {e}")
+    if args.no_vertices:
+        freed = drop_mesh_vertices(out_dir)
+        print(f"[INFO] --no-vertices: removed the vertices from {mesh_dir} ({freed / 2**30:.2f} GiB)")
 
     # Archives extracted in place next to the raw file (a temp extract_root is removed at exit)
     if extract_root is None:

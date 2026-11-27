@@ -191,6 +191,8 @@ def load_people(out_dir: str, frame_range, stride: int, ids, to_rig: Optional[Ca
         if ids and pid not in ids:
             continue
         with np.load(path) as d:
+            if "vertices" not in d.files:
+                raise SystemExit(f"[ERROR] {path} has no vertices (a --no-vertices Stage 3 output)")
             frames = d["frame_names"].astype(np.int64)
             faces = d["faces"]
         keep = np.ones(len(frames), dtype=bool)

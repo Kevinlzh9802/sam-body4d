@@ -35,6 +35,11 @@
 #                                the same suffixes as stage3_mhr.sh's)
 #   -redo                        run step 1 again even if stage3_camera exists
 #   -no-video                    no reproj_overlay.mp4
+#   -no-vertices                 at the end, drop the mesh vertices from the npz of
+#                                stage3_multiview and stage3_camera (keypoints, cam_t,
+#                                frame_names stay: MBs instead of GBs per person); the
+#                                videos still show the meshes. stage3_camera folders
+#                                without vertices are made again on the next run
 #   -sbatch "<flags>"            extra sbatch flags
 set -euo pipefail
 
@@ -62,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     -session|--session) [ $# -ge 2 ] || die "$1 needs a value"; SESSION="$2"; shift 2 ;;
     -redo)              REDO=1; shift ;;
     -no-video)          MV_ARGS+=(--no-video); shift ;;
+    -no-vertices)       MV_ARGS+=(--no-vertices); shift ;;
     *)
       parse_common_args "$@"
       shift "$COMMON_SHIFT"
@@ -86,6 +92,7 @@ EXTR_DIR="$CAMERA_DIR/extrinsics"
 SEQS=()
 for bn in "${BATCH_NUMS[@]}"; do SEQS+=("$(printf 'batch%02d' "$bn")"); done
 CONTAINER_GPU=0
+mkdir -p "$SMOOTH_DIR"  # a bind mount (lib/dataset.sh) needs it to exist
 self_submit stage3_multiview "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"
@@ -123,7 +130,8 @@ for bn in "${BATCH_NUMS[@]}"; do
         continue
       fi
       out_dir="$SMOOTH_DIR/$seq/$CAMERA_LABEL"
-      if [ "$REDO" = 0 ] && [ -f "$out_dir/stage3_opt_summary.json" ]; then
+      if [ "$REDO" = 0 ] && [ -f "$out_dir/stage3_opt_summary.json" ] &&
+         ! grep -qx 'no_vertices: True' "$out_dir/stage3_run_options.txt" 2>/dev/null; then
         echo "[INFO] $seq: reusing $out_dir"
         cam_dirs+=("$(host_to_container "$out_dir")")
         continue

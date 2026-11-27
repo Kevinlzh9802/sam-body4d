@@ -44,6 +44,9 @@ outside the study) are ignored.
                Stage 1 frame, scripts/render_overlay_video.py; --no-video to
                skip). Summary of all cameras:
                stage3_multiview_summary.json in each output folder.
+               --no-vertices: at the end, the npz of the outputs and of the
+               inputs keep only keypoints / cam_t / frame_names (no vertices,
+               which are the GBs); the inputs then cannot be used again.
 
 Sync: the summary also lists, per camera pair, the median distance between the
 two cameras' rays through the same torso point for frame offsets -30..30. With
@@ -78,6 +81,7 @@ from scripts.render_overlay_video import render_overlay_video
 from scripts.view_stage3 import (COSILAB_SESSIONS, batch_number, camera_number, load_rig_calibration,
                                  read_run_options, session_of)
 from smoothing.ground_plane_opt import FOOT_IDXS, GroundOptConfig, load_extrinsics_json, optimize_ground_ray_scale
+from smoothing.stage3_core import drop_mesh_vertices
 from utils.plot_mesh_heights import plot_mesh_heights
 
 # mhr70 torso points used for triangulation (left/right averaged, so a swapped
@@ -142,6 +146,9 @@ def load_camera(in_dir: str, out_label: str, rig: Dict[str, Any]) -> CamInput:
             if "keypoints" not in z.files or "cam_t" not in z.files:
                 raise SystemExit(f"[ERROR] {in_dir}: {fn} has no keypoints / cam_t (made before they were "
                                  "exported); run stage3_mhr.py again for this camera")
+            if "vertices" not in z.files:
+                raise SystemExit(f"[ERROR] {in_dir}: {fn} has no vertices (--no-vertices output); "
+                                 "run stage3_mhr.py again for this camera")
             kps = z["keypoints"].astype(np.float64)
             people[pid] = CamPerson(frames=z["frame_names"].astype(np.int64), torso=torso_points(kps),
                                     feet=kps[:, list(FOOT_IDXS)])
@@ -386,6 +393,8 @@ def main() -> None:
     ap.add_argument("--no-contact", action="store_true", help="skip the per-frame floor contact")
     ap.add_argument("--ground-iters", type=int, default=GroundOptConfig.iters)
     ap.add_argument("--no-video", action="store_true", help="no reprojection overlay videos")
+    ap.add_argument("--no-vertices", action="store_true",
+                    help="at the end, drop the vertices from the outputs' and the inputs' npz")
     args = ap.parse_args()
 
     rig_cams = load_rig_calibration(args.calib)
@@ -470,6 +479,9 @@ def main() -> None:
     for c in cams:
         with open(os.path.join(c.out_dir, "stage3_multiview_summary.json"), "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2)
+    if args.no_vertices:
+        freed = sum(drop_mesh_vertices(d) for c in cams for d in (c.out_dir, c.in_dir))
+        print(f"[INFO] --no-vertices: removed the vertices from the outputs and inputs ({freed / 2**30:.2f} GiB)")
     print(f"[INFO] Done: {', '.join(c.out_dir for c in cams)}")
 
 

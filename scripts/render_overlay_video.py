@@ -12,7 +12,8 @@ extrinsics when exported in world coordinates, and stage3_run_options.txt for
 the intrinsics and the Stage 1 folder (images(.zip), masks(.zip),
 id_mapping.json; archives are read in place). The video covers the frames from
 the first to the last frame with a mesh. A person has the same colour in every
-camera's video and in scripts/view_stage3.py.
+camera's video and in scripts/view_stage3.py. An output without vertices
+(--no-vertices) gets the skeletons only.
 
 Called at the end of stage3_mhr.py and, per camera, stage3_multiview.py
 (--no-video there to skip). To (re)make videos by hand:
@@ -104,11 +105,21 @@ def _person_layers(job) -> Tuple[int, Dict[str, Layer]]:
     with np.load(path) as z:
         names = [str(n) for n in z["frame_names"]]
         kps = z["keypoints"][:, list(PRIMARY_KPS)].astype(np.float64) if "keypoints" in z.files else None
-        faces = z["faces"]
+        faces = z["faces"] if "vertices" in z.files else None  # None: --no-vertices output
     if to_cam is not None:  # world (world units) -> camera (m): x_cam = (R x + t) / ws
         R, t, ws = to_cam
         if kps is not None:
             kps = (kps @ R.T + t) / ws
+
+    def joints(i: int) -> np.ndarray:
+        uv = np.full((len(PRIMARY_KPS), 2), np.nan, dtype=np.float32)
+        if kps is not None:
+            front = kps[i, :, 2] > 0.01
+            uv[front] = _project(K, kps[i, front])
+        return uv
+
+    if faces is None:  # the skeleton only
+        return pid, {n: ([], joints(i)) for i, n in enumerate(names)}
     layers: Dict[str, Layer] = {}
     i = 0
     for block in iter_npz_rows(path, "vertices", chunk):
@@ -118,11 +129,7 @@ def _person_layers(job) -> Tuple[int, Dict[str, Layer]]:
         for v in block:
             sil = _rasterize_mesh(_project(K, v), faces, v[:, 2], h, w)
             cnts, _ = cv2.findContours(sil, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            uv = np.full((len(PRIMARY_KPS), 2), np.nan, dtype=np.float32)
-            if kps is not None:
-                front = kps[i, :, 2] > 0.01
-                uv[front] = _project(K, kps[i, front])
-            layers[names[i]] = ([c.astype(np.int16) for c in cnts], uv)
+            layers[names[i]] = ([c.astype(np.int16) for c in cnts], joints(i))
             i += 1
     return pid, layers
 

@@ -33,6 +33,10 @@
 #   -sigma <frames>              smoothing width (default: stage3_mhr.py's)
 #   -no-smooth | -no-mask | -no-ground   leave a step out (to compare)
 #   -no-video                    no reproj_overlay.mp4
+#   -no-vertices                 npz without the mesh vertices (keypoints, cam_t,
+#                                frame_names only: MBs instead of GBs per person);
+#                                removed after the video, which still shows the meshes.
+#                                Not with -camera (the multi-view step needs them)
 #   -camera-space                export in camera space even with extrinsics
 #   -camera                      = -no-ground -camera-space -no-video, into
 #                                stage3_camera: the per-camera input of the multi-view
@@ -57,6 +61,7 @@ LABEL=""
 SUFFIX=""
 BASE=stage3_height
 NO_GROUND=0
+NO_VERTICES=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     -no-ground)         STAGE3_ARGS+=(--no-ground); BASE=stage3_noground; NO_GROUND=1; shift ;;
     -camera-space)      STAGE3_ARGS+=(--export-camera-space); SUFFIX+="_cam"; shift ;;
     -no-video)          STAGE3_ARGS+=(--no-video); shift ;;
+    -no-vertices)       STAGE3_ARGS+=(--no-vertices); NO_VERTICES=1; shift ;;
     -camera)            STAGE3_ARGS+=(--no-ground --export-camera-space --no-video); BASE=stage3_camera; NO_GROUND=1; shift ;;
     -label|--label)     [ $# -ge 2 ] || die "$1 needs a value"; LABEL="$2"; shift 2 ;;
     -segment|-simple|--segment|--simple)
@@ -77,6 +83,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+[ "$BASE" != stage3_camera ] || [ "$NO_VERTICES" = 0 ] || \
+  die "-no-vertices does not go with -camera: the multi-view step needs the vertices (stage3_multiview.sh -no-vertices removes them afterwards)"
 [ "$BASE" != stage3_camera ] || SUFFIX="${SUFFIX//_cam/}"
 LABEL="${LABEL:-$BASE$SUFFIX}"
 
@@ -86,6 +94,7 @@ CONTAINER_GPU=0
 
 load_dataset "$DATASET_ARG"
 resolve_seqs "$RAW_DIR"
+mkdir -p "$SMOOTH_DIR"  # a bind mount (lib/dataset.sh) needs it to exist
 self_submit stage3 "$LAUNCHER" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
 
 echo "[INFO] Cluster: $CLUSTER  Dataset: $DATASET  code: $SB4D_CODE"

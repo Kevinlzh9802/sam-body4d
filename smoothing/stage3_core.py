@@ -3,14 +3,47 @@
 People with a negative real ID are left out: Stage 1's ID mapping marks people
 outside the study with -1, -2, ... (Stage 2 runs from before skipping them still
 have their params).
+
+Also drop_mesh_vertices: the --no-vertices clean-up of a Stage 3 output.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
+
+# Marker in stage3_run_options.txt of an output whose npz have no vertices
+NO_VERTICES_OPT = "no_vertices"
+
+
+def drop_mesh_vertices(stage3_dir: str) -> int:
+    """Rewrites <stage3_dir>/meshes_4d_individual/*.npz without ``vertices`` and
+    ``faces`` (the GBs; ``keypoints``, ``cam_t``, ``frame_names`` stay) and notes
+    ``no_vertices: True`` in stage3_run_options.txt. Returns the bytes freed."""
+    mesh_dir = os.path.join(stage3_dir, "meshes_4d_individual")
+    freed = 0
+    for fn in sorted(os.listdir(mesh_dir)) if os.path.isdir(mesh_dir) else []:
+        if not fn.endswith(".npz") or fn.endswith(".part.npz"):
+            continue
+        path = os.path.join(mesh_dir, fn)
+        with np.load(path) as z:
+            if "vertices" not in z.files:
+                continue
+            keep = {k: z[k] for k in z.files if k not in ("vertices", "faces")}
+        size = os.path.getsize(path)
+        tmp = path[:-4] + ".part.npz"
+        np.savez_compressed(tmp, **keep)
+        os.replace(tmp, path)
+        freed += size - os.path.getsize(path)
+    opts = os.path.join(stage3_dir, "stage3_run_options.txt")
+    lines = open(opts, encoding="utf-8").read().splitlines() if os.path.isfile(opts) else []
+    lines = [ln for ln in lines if not ln.startswith(f"{NO_VERTICES_OPT}: ")] + [f"{NO_VERTICES_OPT}: True"]
+    with open(opts, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return freed
 
 
 def stack_frames_to_tensors(
