@@ -41,8 +41,8 @@ sbatch_flags() {
     # mv_time_flag). Measured on an A40, 2026-11-24 (sacct Elapsed / TotalCPU / MaxRSS):
     #   stage2 -fisheye  0.60 s per person crop (cam01 600 frames: 6600 crops 66 min; cam03 ~10800 crops 105 min),
     #                    ~1.4 CPUs, 11.5 GB RAM, 15 GB GPU memory
-    #   stage3_mvfit     2 cams, 600 frames, 20 people, 300 iterations: 46 min fitting (0.23 s per person-frame)
-    #                    + ~34 min loading Stage 1 masks / starts / evaluation; 1 CPU, 6.2 GB RAM
+    #   stage3_mvfit     600 frames, 20 people, 300 iterations: 2 cams 47 min, 6 cams 88 min, 8 cams 109 min
+    #                    (~25 min + ~10.5 min per camera); 1 CPU, 4.2-6.2 GB RAM
     #   mv_segments      21 s per 10 s segment (raw GoPro decode + H.264), ~2 CPUs, 1.2 GB
     #   mv_prompts       19 s for one segment on a GPU, 3.3 GB (2026-11-25); now CPU only
     #   mv_stage1        OOM at 24G (>25 GB) while saving the masks of 1 segment x 18 people: SAM-3 keeps the
